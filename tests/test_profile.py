@@ -1,6 +1,8 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from profile import Sample, generate_gcode, simulated_scan, smooth
+from profile import PassSpec, Sample, generate_gcode, load_csv, save_csv, simulated_scan, smooth
 
 
 class ProfileTests(unittest.TestCase):
@@ -35,6 +37,25 @@ class ProfileTests(unittest.TestCase):
         options["tool_x_offset"] = -1
         with self.assertRaises(ValueError):
             generate_gcode(points, **options)
+
+    def test_saved_smoothed_profile_and_independent_passes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "smoothed.csv"
+            points = [Sample(0, 2), Sample(5, 2.5), Sample(10, 2)]
+            save_csv(path, points)
+            self.assertEqual(load_csv(path), points)
+            code = generate_gcode(
+                load_csv(path), rim_radius=10, passes=1, total_depth=3,
+                max_depth=0.5, feed=50, rpm=500, surface_speed=150,
+                max_rpm=1200, safe_z=5,
+                pass_specs=[PassSpec(0.1, 30, 400, 100),
+                            PassSpec(0.2, 20, 450, 120, False),
+                            PassSpec(0.3, 15, 600, 130)],
+            )
+            self.assertEqual(code.count("(PASS"), 2)
+            self.assertIn("G97 S600", code)
+            self.assertIn("F15.0000", code)
+            self.assertNotIn("G97 S450", code)
 
 
 if __name__ == "__main__":
