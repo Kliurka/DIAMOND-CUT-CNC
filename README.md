@@ -15,12 +15,12 @@ Alternatively, install PyQt5 into a Python virtual environment. The profile and 
 
 ## Workflow
 
-- Left: simulated machine/work X and Z positions, E-stop reset, simulated homing, work zero, cross-shaped jog controls, step sizes and simulated work-home motion.
-- Scan tab: generate a repeatable synthetic rim profile, compare raw and median-smoothed curves, and save both CSV files.
+- Left: simulated machine/work X, Z and Y positions, E-stop reset, simulated homing, work zero, cross-shaped X/Z jog controls, separate Y table up/down buttons, step sizes and simulated work-home motion.
+- Scan tab: set X start and X end in work coordinates by typing or capturing the current Work X, generate a repeatable synthetic rim profile, compare raw and median-smoothed curves, and save both CSV files.
 - Toolpath & Turning tab: load the saved smoothed CSV, edit each pass's enable flag, target cut depth, feed, RPM and surface speed in a table; generate and save a G-code preview.
 - Settings tab: rim radius, scan step, sensor/tool X and Z offsets, safe Z clearance, maximum total cut depth and a fixed Y table position.
 
-The simulated scan moves from the outer edge toward the center. Its stored `edge_mm` starts at zero at the edge. The generated turning code converts it to a **radius-coordinate X with X0 at the spindle center**, so LinuxCNC G96 has the correct reference. This is only a provisional geometry model; actual directions and offsets require verification at the machine.
+The simulated scan moves from the selected X start to X end (increasing work X, toward the center). Its stored `edge_mm` starts at zero at the selected start and increases over the travel. Set the **rim radius at scan start** in Settings; the scan distance must not exceed this radius. The generated turning code converts `edge_mm` to a **radius-coordinate X with X0 at the spindle center**, so LinuxCNC G96 has the correct reference. This is only a provisional geometry model; actual directions and offsets require verification at the machine. Y+ means table up in the simulator; the physical direction remains to be mapped.
 
 The G-code generator currently offers G97/G94 or G96/G95. G95 requires actual spindle speed feedback in LinuxCNC. All generated moves are tagged as unverified, and the generator rejects passes deeper than the configured limit. Real spindle feedback, sensor acquisition, machine homing and safe travel are future hardware steps.
 
