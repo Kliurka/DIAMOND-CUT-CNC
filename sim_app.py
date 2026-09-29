@@ -2,7 +2,7 @@
 import math
 import sys
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox,
@@ -67,6 +67,11 @@ class Window(QMainWindow):
         self.machine = {"X": 0.0, "Z": 0.0, "Y": 0.0}
         self.offset = {"X": 0.0, "Z": 0.0}
         self.estop = True
+        self.jog_axis = None
+        self.jog_sign = 0
+        self.jog_timer = QTimer(self)
+        self.jog_timer.setInterval(80)
+        self.jog_timer.timeout.connect(self.continuous_tick)
         split = QSplitter(Qt.Horizontal)
         split.addWidget(self.build_controls())
         split.addWidget(self.build_tabs())
@@ -129,7 +134,8 @@ class Window(QMainWindow):
             movement.addWidget(QLabel(axis), row, 0)
             for col, sign in ((1, -1), (2, 1)):
                 button = QPushButton(f"{axis}{'+' if sign > 0 else '−'}")
-                button.clicked.connect(lambda _=False, a=axis, s=sign: self.jog(a, s))
+                button.pressed.connect(lambda a=axis, s=sign: self.jog_pressed(a, s))
+                button.released.connect(self.jog_released)
                 movement.addWidget(button, row, col)
         layout.addLayout(movement)
         root.addWidget(jog)
@@ -158,12 +164,13 @@ class Window(QMainWindow):
         fields = QGridLayout()
         self.passes = QSpinBox(); self.passes.setRange(1, 20); self.passes.setValue(4)
         self.depth = number(0.2, 0.001, 20, 3, " mm")
-        self.feed = number(0.1, 0.001, 1000, 3)
+        self.feed = number(50, 0.001, 1000, 3)
         self.rpm = QSpinBox(); self.rpm.setRange(1, 10000); self.rpm.setValue(500)
         self.max_rpm = QSpinBox(); self.max_rpm.setRange(1, 10000); self.max_rpm.setValue(1200)
         self.surface_speed = number(150, 0.1, 5000, 1, " m/min")
         self.mode = QComboBox()
         self.mode.addItems(["G97 / G94 (RPM, mm/min)", "G96 / G95 (CSS, mm/rev)"])
+        self.mode.currentIndexChanged.connect(lambda index: self.feed.setValue(0.1 if index else 50))
         for index, (label, widget) in enumerate((
             ("Passes", self.passes), ("Total depth", self.depth),
             ("Feed (mode dependent)", self.feed), ("Starting RPM", self.rpm),
@@ -210,6 +217,8 @@ class Window(QMainWindow):
 
     def toggle_estop(self):
         self.estop = not self.estop
+        if self.estop:
+            self.jog_released()
         self.update_dros()
 
     def zero(self, axis):
@@ -228,15 +237,29 @@ class Window(QMainWindow):
         self.machine["X"] = self.offset["X"]
         self.update_dros()
 
-    def jog(self, axis, sign):
-        if self.estop: return
-        if self.continuous.isChecked():
-            QMessageBox.information(self, "Simulation", "Continuous hold jog requires LinuxCNC integration. Select a step size here.")
+    def jog_pressed(self, axis, sign):
+        if self.estop:
             return
-        selected = self.step_group.checkedButton()
-        if selected:
-            self.machine[axis] += sign * selected.property("step")
-            self.update_dros()
+        if self.continuous.isChecked():
+            self.jog_axis, self.jog_sign = axis, sign
+            self.jog_timer.start()
+            self.continuous_tick()
+        else:
+            selected = self.step_group.checkedButton()
+            if selected:
+                self.machine[axis] += sign * selected.property("step")
+                self.update_dros()
+
+    def jog_released(self):
+        self.jog_timer.stop()
+        self.jog_axis = None
+
+    def continuous_tick(self):
+        if self.estop or self.jog_axis is None or not self.continuous.isChecked():
+            self.jog_released()
+            return
+        self.machine[self.jog_axis] += self.jog_sign * 0.8  # 10 mm/s, 80 ms simulated tick
+        self.update_dros()
 
     def scan(self):
         try:
