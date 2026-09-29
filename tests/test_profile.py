@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from profile import PassSpec, Sample, generate_gcode, load_csv, save_csv, simulated_scan, smooth
+from profile import PassSpec, Sample, generate_gcode, load_csv, save_csv, simulated_scan, simulated_scan_range, smooth
 
 
 class ProfileTests(unittest.TestCase):
@@ -11,6 +11,14 @@ class ProfileTests(unittest.TestCase):
         filtered = smooth(raw)
         self.assertEqual(len(raw), 101)
         self.assertEqual([p.edge_mm for p in raw], [p.edge_mm for p in filtered])
+
+    def test_scan_range_starts_at_selected_work_x_but_csv_is_relative(self):
+        points = simulated_scan_range(12, 22, 2, 20)
+        self.assertEqual([p.edge_mm for p in points], [0, 2, 4, 6, 8, 10])
+        with self.assertRaises(ValueError):
+            simulated_scan_range(22, 12, 2, 20)
+        with self.assertRaises(ValueError):
+            simulated_scan_range(12, 42, 2, 20)
 
     def test_preview_uses_center_as_x_zero_and_safe_pass_depths(self):
         points = [Sample(0, 2), Sample(50, 2.5), Sample(100, 2)]
