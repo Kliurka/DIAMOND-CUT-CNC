@@ -28,7 +28,27 @@ The median window removes isolated spikes; the optional mean window (1 = off) fu
 
 The G-code generator currently offers G97/G94 or G96/G95. G95 requires actual spindle speed feedback in LinuxCNC. All generated moves are tagged as unverified, and the generator rejects passes deeper than the configured limit. Real spindle feedback, sensor acquisition, machine homing and safe travel are future hardware steps.
 
-The Turning tab has G-code text on the left and a space for LinuxCNC's **actual QtVCP GCodeGraphics** on the right. In a standalone Python simulation there is no LinuxCNC interpreter or INI context, so the right side reports that the native preview is unavailable. If launched in a LinuxCNC context with `INI_FILE_NAME` and QtVCP importable, the application attempts to construct the real widget and load the generated preview. That integration has **not yet been verified in a LinuxCNC runtime**. No custom 3D rendering is substituted for it.
+The Turning tab has G-code text on the left and LinuxCNC's **actual QtVCP GCodeGraphics** on the right when the `diamondcut` QtVCP screen is launched by LinuxCNC. Standalone `python3 sim_app.py` deliberately shows an explanatory placeholder. The QtVCP handler dynamically registers the native widget with QtVCP, then loads the generated G-code into it. This integration has **not yet been verified in a LinuxCNC runtime**. The left control panel remains simulated even when launched as a QtVCP screen.
+
+## Native QtVCP preview in a LinuxCNC simulation
+
+Use a **copy** of an existing LinuxCNC simulation configuration; do not replace your machine configuration. In the copied configuration directory, create symbolic links to `qtvcp/diamondcut.ui` and `qtvcp/diamondcut_handler.py` from this repository. For example, while in the repository directory, with the copied simulation config at `~/linuxcnc/configs/diamondcut-preview`:
+
+```bash
+ln -s "$(pwd)/qtvcp/diamondcut.ui" ~/linuxcnc/configs/diamondcut-preview/diamondcut.ui
+ln -s "$(pwd)/qtvcp/diamondcut_handler.py" ~/linuxcnc/configs/diamondcut-preview/diamondcut_handler.py
+```
+
+In that **copied** config's INI file change its existing `[DISPLAY]` setting to:
+
+```ini
+[DISPLAY]
+DISPLAY = qtvcp diamondcut
+LATHE = 1
+GEOMETRY = XZ
+```
+
+Preserve its other INI and HAL sections, and start this copied INI with the usual LinuxCNC launcher. Generate the preview from the Turning tab. The native widget will then occupy the right half of the preview area. If the QtVCP screen fails to start, collect the terminal output and the LinuxCNC version. The project has no real HAL motor or laser wiring yet.
 
 ## Tests
 
