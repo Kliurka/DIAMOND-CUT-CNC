@@ -14,6 +14,15 @@ class Sample:
     z_mm: float
 
 
+@dataclass(frozen=True)
+class PassSpec:
+    depth_mm: float
+    feed: float
+    rpm: int
+    surface_speed: float
+    enabled: bool = True
+
+
 def simulated_scan(radius_mm: float, step_mm: float) -> list[Sample]:
     if radius_mm <= 0 or step_mm <= 0:
         raise ValueError("Radius and step must be positive")
@@ -48,6 +57,19 @@ def save_csv(path: str | Path, samples: list[Sample]) -> None:
         writer.writerows((f"{s.edge_mm:.4f}", f"{s.z_mm:.4f}") for s in samples)
 
 
+def load_csv(path: str | Path) -> list[Sample]:
+    with open(path, newline="", encoding="utf-8-sig") as stream:
+        reader = csv.DictReader(stream)
+        if reader.fieldnames != ["edge_mm", "z_mm"]:
+            raise ValueError("Expected CSV columns: edge_mm,z_mm")
+        samples = [Sample(float(row["edge_mm"]), float(row["z_mm"])) for row in reader]
+    if len(samples) < 2 or not all(math.isfinite(s.edge_mm) and math.isfinite(s.z_mm) for s in samples):
+        raise ValueError("Profile needs at least two finite samples")
+    if samples[0].edge_mm < 0 or any(a.edge_mm >= b.edge_mm for a, b in zip(samples, samples[1:])):
+        raise ValueError("edge_mm must rise strictly from the rim edge")
+    return samples
+
+
 def generate_gcode(
     samples: list[Sample], *, rim_radius: float, passes: int,
     total_depth: float, max_depth: float, feed: float, rpm: int,
@@ -55,11 +77,23 @@ def generate_gcode(
     sensor_x_offset: float = 0.0, sensor_z_offset: float = 0.0,
     tool_x_offset: float = 0.0, tool_z_offset: float = 0.0,
     use_css: bool = False,
+    pass_specs: list[PassSpec] | None = None,
 ) -> str:
     if not samples or passes < 1 or rim_radius <= 0 or feed <= 0 or rpm <= 0 or max_rpm <= 0:
         raise ValueError("Missing profile or invalid machining parameter")
-    if total_depth <= 0 or max_depth <= 0 or total_depth > max_depth:
+    if max_depth <= 0 or (pass_specs is None and (total_depth <= 0 or total_depth > max_depth)):
         raise ValueError("Cut depth exceeds configured maximum")
+    if pass_specs is None:
+        pass_specs = [PassSpec(total_depth * i / passes, feed, rpm, surface_speed)
+                      for i in range(1, passes + 1)]
+    active = [p for p in pass_specs if p.enabled]
+    if not active or any(not math.isfinite(p.depth_mm) or p.depth_mm <= 0 or p.depth_mm > max_depth or
+                         not math.isfinite(p.feed) or p.feed <= 0 or p.rpm <= 0 or
+                         (use_css and (not math.isfinite(p.surface_speed) or p.surface_speed <= 0))
+                         for p in active):
+        raise ValueError("Invalid per-pass setting or maximum cut depth exceeded")
+    if any(a.depth_mm >= b.depth_mm for a, b in zip(active, active[1:])):
+        raise ValueError("Enabled pass depths must increase")
     if safe_z <= 0 or (use_css and surface_speed <= 0):
         raise ValueError("Invalid clearance or surface speed")
     xs = [rim_radius - s.edge_mm + tool_x_offset - sensor_x_offset for s in samples]
@@ -73,14 +107,15 @@ def generate_gcode(
         "(SIMULATION PREVIEW - VERIFY COORDINATES AND CLEARANCES BEFORE MACHINE USE)",
         "G21 G90 G40 G49 G54",
         "G8",  # Radius X mode. Center is X0.
-        f"G96 D{max_rpm} S{surface_speed:.3f}" if use_css else f"G97 S{rpm}",
         "G95" if use_css else "G94",
-        f"F{feed:.4f}",
+        f"G96 D{max_rpm} S{active[0].surface_speed:.3f}" if use_css else f"G97 S{active[0].rpm}",
         "M3",
     ]
-    for number in range(1, passes + 1):
-        depth = total_depth * number / passes
-        lines.append(f"(PASS {number}/{passes}; depth {depth:.4f} mm)")
+    for number, setting in enumerate(active, 1):
+        depth = setting.depth_mm
+        lines.append(f"(PASS {number}/{len(active)}; depth {depth:.4f} mm)")
+        lines.append(f"G96 D{max_rpm} S{setting.surface_speed:.3f}" if use_css else f"G97 S{setting.rpm}")
+        lines.append(f"F{setting.feed:.4f}")
         lines.append(f"G0 Z{zprofile[0] + safe_z:.4f}")
         lines.append(f"G0 X{xs[0]:.4f}")
         lines.append(f"G1 Z{zprofile[0] - depth:.4f}")
