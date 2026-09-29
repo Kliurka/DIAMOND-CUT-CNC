@@ -216,7 +216,9 @@ class Window(QMainWindow):
         pass_buttons = QHBoxLayout()
         for label, callback in (("Create pass rows", self.reset_pass_rows),
                                 ("Add pass", self.add_pass), ("Remove selected pass", self.remove_pass)):
-            button = QPushButton(label); button.clicked.connect(callback); pass_buttons.addWidget(button)
+            button = QPushButton(label)
+            button.clicked.connect(lambda _=False, action=callback: action())
+            pass_buttons.addWidget(button)
         turn_layout.addLayout(pass_buttons)
         self.reset_pass_rows()
         actions = QHBoxLayout()
