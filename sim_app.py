@@ -1,6 +1,8 @@
 """Desktop-only PyQt5 mock machine and scan/turn workflow."""
-import math
+import os
 import sys
+import tempfile
+from pathlib import Path
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter, QPen
@@ -9,9 +11,10 @@ from PyQt5.QtWidgets import (
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QMainWindow, QMessageBox, QPushButton, QRadioButton,
     QSpinBox, QSplitter, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QHeaderView,
 )
 
-from profile import generate_gcode, save_csv, simulated_scan, smooth
+from profile import PassSpec, generate_gcode, load_csv, save_csv, simulated_scan, smooth
 
 
 class Plot(QWidget):
@@ -130,13 +133,13 @@ class Window(QMainWindow):
                 radio.setChecked(True)
         layout.addLayout(steps)
         movement = QGridLayout()
-        for row, axis in enumerate(("X", "Z")):
-            movement.addWidget(QLabel(axis), row, 0)
-            for col, sign in ((1, -1), (2, 1)):
-                button = QPushButton(f"{axis}{'+' if sign > 0 else '−'}")
-                button.pressed.connect(lambda a=axis, s=sign: self.jog_pressed(a, s))
-                button.released.connect(self.jog_released)
-                movement.addWidget(button, row, col)
+        for row, col, axis, sign in ((0, 1, "Z", 1), (2, 1, "Z", -1),
+                                     (1, 0, "X", -1), (1, 2, "X", 1)):
+            button = QPushButton(f"{axis}{'+' if sign > 0 else '−'}")
+            button.pressed.connect(lambda a=axis, s=sign: self.jog_pressed(a, s))
+            button.released.connect(self.jog_released)
+            movement.addWidget(button, row, col)
+        movement.addWidget(QLabel("X / Z"), 1, 1, alignment=Qt.AlignCenter)
         layout.addLayout(movement)
         root.addWidget(jog)
         root.addWidget(QLabel("Y table position is fixed during scan and turning."))
@@ -151,7 +154,8 @@ class Window(QMainWindow):
         self.scan_plot = Plot()
         scan_layout.addWidget(self.scan_plot, 1)
         buttons = QHBoxLayout()
-        for label, callback in (("Run simulated scan", self.scan), ("Save raw CSV", self.save_raw)):
+        for label, callback in (("Run simulated scan", self.scan), ("Smooth profile", self.filter_scan),
+                                ("Save raw CSV", self.save_raw), ("Save smoothed CSV", self.save_smoothed)):
             button = QPushButton(label)
             button.clicked.connect(callback)
             buttons.addWidget(button)
@@ -159,8 +163,12 @@ class Window(QMainWindow):
         tabs.addTab(scan, "1. Scan")
         turning = QWidget()
         turn_layout = QVBoxLayout(turning)
-        self.turn_plot = Plot()
-        turn_layout.addWidget(self.turn_plot, 1)
+        self.loaded_profile = []
+        self.loaded_path = QLabel("No smoothed profile loaded")
+        turn_layout.addWidget(self.loaded_path)
+        load_button = QPushButton("Load smoothed CSV")
+        load_button.clicked.connect(self.load_smoothed)
+        turn_layout.addWidget(load_button)
         fields = QGridLayout()
         self.passes = QSpinBox(); self.passes.setRange(1, 20); self.passes.setValue(4)
         self.depth = number(0.2, 0.001, 20, 3, " mm")
@@ -180,12 +188,35 @@ class Window(QMainWindow):
             fields.addWidget(QLabel(label), index // 4, (index % 4) * 2)
             fields.addWidget(widget, index // 4, (index % 4) * 2 + 1)
         turn_layout.addLayout(fields)
+        turn_layout.addWidget(QLabel("Passes: target depth is measured from the scanned surface. Double-click cells to edit."))
+        self.pass_table = QTableWidget(0, 5)
+        self.pass_table.setHorizontalHeaderLabels(["Use", "Target depth mm", "Feed", "RPM", "Surface m/min"])
+        self.pass_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.pass_table.setMinimumHeight(160)
+        turn_layout.addWidget(self.pass_table)
+        pass_buttons = QHBoxLayout()
+        for label, callback in (("Create pass rows", self.reset_pass_rows),
+                                ("Add pass", self.add_pass), ("Remove selected pass", self.remove_pass)):
+            button = QPushButton(label); button.clicked.connect(callback); pass_buttons.addWidget(button)
+        turn_layout.addLayout(pass_buttons)
+        self.reset_pass_rows()
         actions = QHBoxLayout()
-        for label, callback in (("Smooth profile", self.filter_scan), ("Generate preview", self.generate), ("Save G-code", self.save_gcode)):
+        for label, callback in (("Generate preview", self.generate), ("Save G-code", self.save_gcode)):
             button = QPushButton(label); button.clicked.connect(callback); actions.addWidget(button)
         turn_layout.addLayout(actions)
+        preview = QSplitter(Qt.Horizontal)
         self.code = QTextEdit(); self.code.setReadOnly(True); self.code.setPlaceholderText("Generated preview G-code appears here")
-        turn_layout.addWidget(self.code, 1)
+        preview.addWidget(self.code)
+        self.native_host = QWidget()
+        self.native_layout = QVBoxLayout(self.native_host)
+        self.native_label = QLabel("LinuxCNC native GCodeGraphics is available in a running LinuxCNC/QtVCP context.\nNo substitute 3D plot is shown.")
+        self.native_label.setWordWrap(True)
+        self.native_layout.addWidget(self.native_label)
+        self.native_widget = None
+        preview.addWidget(self.native_host)
+        preview.setSizes([440, 440])
+        turn_layout.addWidget(preview, 1)
+        self.init_native_preview()
         tabs.addTab(turning, "2. Toolpath & Turning")
         settings = QWidget()
         form = QFormLayout(settings)
@@ -266,8 +297,7 @@ class Window(QMainWindow):
             self.raw = simulated_scan(self.radius.value(), self.scan_step.value())
             self.filtered = []
             self.scan_plot.raw, self.scan_plot.filtered = self.raw, []
-            self.turn_plot.raw, self.turn_plot.filtered = self.raw, []
-            self.scan_plot.update(); self.turn_plot.update()
+            self.scan_plot.update()
             self.code.clear()
             self.statusBar().showMessage(f"Synthetic scan: {len(self.raw)} points")
         except ValueError as exc:
@@ -276,25 +306,28 @@ class Window(QMainWindow):
     def filter_scan(self):
         try:
             self.filtered = smooth(self.raw)
-            self.turn_plot.filtered = self.filtered
-            self.turn_plot.update()
+            self.scan_plot.filtered = self.filtered
+            self.scan_plot.update()
             self.code.clear()
         except ValueError as exc:
             QMessageBox.warning(self, "Profile", str(exc))
 
     def generate(self):
         try:
-            if not self.filtered:
-                raise ValueError("Smooth the scan before generating G-code")
+            if not self.loaded_profile:
+                raise ValueError("Load a saved smoothed CSV from the Scan tab first")
+            settings = self.read_pass_rows()
             result = generate_gcode(
-                self.filtered, rim_radius=self.radius.value(), passes=self.passes.value(),
+                self.loaded_profile, rim_radius=self.radius.value(), passes=self.passes.value(),
                 total_depth=self.depth.value(), max_depth=self.max_depth.value(),
                 feed=self.feed.value(), rpm=self.rpm.value(),
                 surface_speed=self.surface_speed.value(), max_rpm=self.max_rpm.value(),
                 safe_z=self.safe_z.value(), sensor_x_offset=self.sensor_x.value(),
                 sensor_z_offset=self.sensor_z.value(), tool_x_offset=self.tool_x.value(),
-                tool_z_offset=self.tool_z.value(), use_css=self.mode.currentIndex() == 1)
+                tool_z_offset=self.tool_z.value(), use_css=self.mode.currentIndex() == 1,
+                pass_specs=settings)
             self.code.setPlainText(result)
+            self.update_native_preview(result)
         except ValueError as exc:
             QMessageBox.warning(self, "Toolpath", str(exc))
 
@@ -302,6 +335,79 @@ class Window(QMainWindow):
         if not self.raw: return
         path, _ = QFileDialog.getSaveFileName(self, "Save raw scan", "scan_raw.csv", "CSV (*.csv)")
         if path: save_csv(path, self.raw)
+
+    def save_smoothed(self):
+        if not self.filtered:
+            QMessageBox.warning(self, "Scan", "Smooth the scan first")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save smoothed profile", "scan_smoothed.csv", "CSV (*.csv)")
+        if path:
+            save_csv(path, self.filtered)
+
+    def load_smoothed(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load smoothed profile", "", "CSV (*.csv)")
+        if not path: return
+        try:
+            self.loaded_profile = load_csv(path)
+            self.loaded_path.setText(f"Loaded: {path} ({len(self.loaded_profile)} points)")
+            self.code.clear()
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Profile", str(exc))
+
+    def add_pass(self, depth=None):
+        row = self.pass_table.rowCount()
+        self.pass_table.insertRow(row)
+        values = [f"{depth if depth is not None else (row+1)*self.depth.value()/max(1,self.passes.value()):.4f}",
+                  f"{self.feed.value():.4f}", str(self.rpm.value()), f"{self.surface_speed.value():.3f}"]
+        enabled = QTableWidgetItem()
+        enabled.setFlags(enabled.flags() | Qt.ItemIsUserCheckable)
+        enabled.setCheckState(Qt.Checked)
+        self.pass_table.setItem(row, 0, enabled)
+        for col, value in enumerate(values, 1):
+            self.pass_table.setItem(row, col, QTableWidgetItem(value))
+
+    def reset_pass_rows(self):
+        self.pass_table.setRowCount(0)
+        for i in range(1, self.passes.value() + 1):
+            self.add_pass(i * self.depth.value() / self.passes.value())
+
+    def remove_pass(self):
+        row = self.pass_table.currentRow()
+        if row >= 0: self.pass_table.removeRow(row)
+
+    def read_pass_rows(self):
+        rows = []
+        for row in range(self.pass_table.rowCount()):
+            try:
+                values = [self.pass_table.item(row, col).text() for col in range(1, 5)]
+                rows.append(PassSpec(float(values[0]), float(values[1]), int(values[2]),
+                                     float(values[3]), self.pass_table.item(row, 0).checkState() == Qt.Checked))
+            except (AttributeError, ValueError):
+                raise ValueError(f"Invalid value in pass row {row+1}")
+        return rows
+
+    def init_native_preview(self):
+        if not os.environ.get("INI_FILE_NAME"):
+            return
+        try:
+            from qtvcp.widgets.gcode_graphics import GCodeGraphics
+            self.native_widget = GCodeGraphics(self.native_host)
+            self.native_layout.removeWidget(self.native_label)
+            self.native_label.hide()
+            self.native_layout.addWidget(self.native_widget)
+        except Exception as exc:
+            self.native_label.setText(f"Native LinuxCNC preview unavailable: {exc}")
+
+    def update_native_preview(self, code):
+        if self.native_widget is None:
+            return
+        try:
+            path = Path(tempfile.gettempdir()) / "diamond_cut_preview.ngc"
+            path.write_text(code, encoding="utf-8")
+            self.native_widget.load_program(None, str(path))
+        except Exception as exc:
+            self.native_label.setText(f"Native preview could not load G-code: {exc}")
+            self.native_label.show()
 
     def save_gcode(self):
         if not self.code.toPlainText(): return
