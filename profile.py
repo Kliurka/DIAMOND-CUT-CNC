@@ -38,6 +38,16 @@ def simulated_scan(radius_mm: float, step_mm: float) -> list[Sample]:
     return result
 
 
+def simulated_scan_range(start_x: float, end_x: float, step_mm: float, radius_at_start: float) -> list[Sample]:
+    """The machine moves toward center (+X); CSV edge positions remain relative to start."""
+    span = end_x - start_x
+    if not all(math.isfinite(v) for v in (start_x, end_x, step_mm, radius_at_start)):
+        raise ValueError("Scan positions must be finite")
+    if span <= 0 or span > radius_at_start:
+        raise ValueError("End X must exceed start X and scan distance must fit within rim radius")
+    return simulated_scan(span, step_mm)
+
+
 def smooth(samples: list[Sample], window: int = 5) -> list[Sample]:
     if window < 1 or window % 2 != 1:
         raise ValueError("Median window must be a positive odd number")
