@@ -1,5 +1,4 @@
 """Desktop-only PyQt5 mock machine and scan/turn workflow."""
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -62,8 +61,9 @@ def number(value, minimum, maximum, decimals=2, suffix=""):
 
 
 class Window(QMainWindow):
-    def __init__(self):
+    def __init__(self, native_preview_factory=None):
         super().__init__()
+        self.native_preview_factory = native_preview_factory
         self.setWindowTitle("Diamond Cut CNC — Simulation")
         self.resize(1280, 790)
         self.raw, self.filtered = [], []
@@ -436,11 +436,10 @@ class Window(QMainWindow):
         return rows
 
     def init_native_preview(self):
-        if not os.environ.get("INI_FILE_NAME"):
+        if self.native_preview_factory is None:
             return
         try:
-            from qtvcp.widgets.gcode_graphics import GCodeGraphics
-            self.native_widget = GCodeGraphics(self.native_host)
+            self.native_widget = self.native_preview_factory(self.native_host)
             self.native_layout.removeWidget(self.native_label)
             self.native_label.hide()
             self.native_layout.addWidget(self.native_widget)
