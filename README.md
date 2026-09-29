@@ -32,23 +32,21 @@ The Turning tab has G-code text on the left and LinuxCNC's **actual QtVCP GCodeG
 
 ## Native QtVCP preview in a LinuxCNC simulation
 
-Use a **copy** of an existing LinuxCNC simulation configuration; do not replace your machine configuration. In the copied configuration directory, create symbolic links to `qtvcp/diamondcut.ui` and `qtvcp/diamondcut_handler.py` from this repository. For example, while in the repository directory, with the copied simulation config at `~/linuxcnc/configs/diamondcut-preview`:
+First locate an existing, working LinuxCNC **simulation** INI on your computer:
 
 ```bash
-ln -s "$(pwd)/qtvcp/diamondcut.ui" ~/linuxcnc/configs/diamondcut-preview/diamondcut.ui
-ln -s "$(pwd)/qtvcp/diamondcut_handler.py" ~/linuxcnc/configs/diamondcut-preview/diamondcut_handler.py
+find ~/linuxcnc/configs -name '*.ini'
 ```
 
-In that **copied** config's INI file change its existing `[DISPLAY]` setting to:
+From this repository directory, substitute the path to a simulation INI you have already run successfully:
 
-```ini
-[DISPLAY]
-DISPLAY = qtvcp diamondcut
-LATHE = 1
-GEOMETRY = XZ
+```bash
+python3 tools/setup_qtvcp_preview.py --source ~/linuxcnc/configs/your-simulation/your-simulation.ini
 ```
 
-Preserve its other INI and HAL sections, and start this copied INI with the usual LinuxCNC launcher. Generate the preview from the Turning tab. The native widget will then occupy the right half of the preview area. If the QtVCP screen fails to start, collect the terminal output and the LinuxCNC version. The project has no real HAL motor or laser wiring yet.
+The script creates `~/linuxcnc/configs/diamondcut-preview`, copies the source simulation configuration and its related files, links this repository's QtVCP files, and changes `DISPLAY`, `LATHE`, and `GEOMETRY` in the **copy**. It prints the exact `linuxcnc` launch command. If you have no simulation INI yet, first create and run one with LinuxCNC's configuration selector; do not use your real machine INI. The destination must not already exist.
+
+Generate the preview from the Turning tab. The native widget should occupy the right half of the preview area. If the QtVCP screen fails to start, collect the terminal output and LinuxCNC version. The project has no real HAL motor or laser wiring yet.
 
 ## Tests
 
