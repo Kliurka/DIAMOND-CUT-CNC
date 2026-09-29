@@ -20,6 +20,14 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             simulated_scan_range(12, 42, 2, 20)
 
+    def test_independent_median_and_mean_smoothing(self):
+        points = [Sample(i, z) for i, z in enumerate((0, 0, 9, 0, 0))]
+        self.assertEqual([s.z_mm for s in smooth(points, 3, 1)], [0, 0, 0, 0, 0])
+        gradual = [Sample(i, z) for i, z in enumerate((0, 0, 3, 0, 0))]
+        self.assertEqual(smooth(gradual, 1, 3)[2].z_mm, 1)
+        with self.assertRaises(ValueError):
+            smooth(points, 3, 2)
+
     def test_preview_uses_center_as_x_zero_and_safe_pass_depths(self):
         points = [Sample(0, 2), Sample(50, 2.5), Sample(100, 2)]
         code = generate_gcode(
