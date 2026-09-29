@@ -48,15 +48,23 @@ def simulated_scan_range(start_x: float, end_x: float, step_mm: float, radius_at
     return simulated_scan(span, step_mm)
 
 
-def smooth(samples: list[Sample], window: int = 5) -> list[Sample]:
-    if window < 1 or window % 2 != 1:
-        raise ValueError("Median window must be a positive odd number")
+def smooth(samples: list[Sample], window: int = 5, average_window: int = 1) -> list[Sample]:
+    if window < 1 or window % 2 != 1 or average_window < 1 or average_window % 2 != 1:
+        raise ValueError("Smoothing windows must be positive odd numbers")
     if not samples:
         raise ValueError("No scan samples")
     half = window // 2
-    return [
+    filtered = [
         Sample(s.edge_mm, median(p.z_mm for p in samples[max(0, i-half):min(len(samples), i+half+1)]))
         for i, s in enumerate(samples)
+    ]
+    if average_window == 1:
+        return filtered
+    half = average_window // 2
+    return [
+        Sample(s.edge_mm, sum(p.z_mm for p in filtered[max(0, i-half):min(len(filtered), i+half+1)])
+               / len(filtered[max(0, i-half):min(len(filtered), i+half+1)]))
+        for i, s in enumerate(filtered)
     ]
 
 
