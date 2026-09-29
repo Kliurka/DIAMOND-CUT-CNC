@@ -164,17 +164,27 @@ class Window(QMainWindow):
         self.scan_end_x = number(230, -1000, 1000, 3, " mm")
         self.scan_step = number(1, 0.01, 20, 2, " mm")
         self.scan_speed = number(600, 1, 10000, 1, " mm/min")
-        for row, (label, field) in enumerate((("X start (work)", self.scan_start_x),
-                                              ("X end (work)", self.scan_end_x))):
-            scan_range.addWidget(QLabel(label), row, 0)
-            scan_range.addWidget(field, row, 1)
+        for col, (label, field) in zip((0, 3), (("X start (work)", self.scan_start_x),
+                                               ("X end (work)", self.scan_end_x))):
+            scan_range.addWidget(QLabel(label), 0, col)
+            scan_range.addWidget(field, 0, col + 1)
             capture = QPushButton("Use current X")
             capture.clicked.connect(lambda _=False, target=field: self.capture_work_x(target))
-            scan_range.addWidget(capture, row, 2)
-        scan_range.addWidget(QLabel("Scan step"), 2, 0)
-        scan_range.addWidget(self.scan_step, 2, 1)
-        scan_range.addWidget(QLabel("X scan speed"), 3, 0)
-        scan_range.addWidget(self.scan_speed, 3, 1)
+            scan_range.addWidget(capture, 0, col + 2)
+        scan_range.addWidget(QLabel("Scan step"), 1, 0)
+        scan_range.addWidget(self.scan_step, 1, 1)
+        scan_range.addWidget(QLabel("X scan feedrate"), 1, 3)
+        scan_range.addWidget(self.scan_speed, 1, 4)
+        self.median_window = QComboBox()
+        self.average_window = QComboBox()
+        for value in (1, 3, 5, 7, 9, 11):
+            self.median_window.addItem(str(value), value)
+            self.average_window.addItem(str(value), value)
+        self.median_window.setCurrentIndex(2)  # five samples
+        scan_range.addWidget(QLabel("Median window (samples)"), 2, 0)
+        scan_range.addWidget(self.median_window, 2, 1)
+        scan_range.addWidget(QLabel("Mean window (samples)"), 2, 3)
+        scan_range.addWidget(self.average_window, 2, 4)
         scan_layout.addLayout(scan_range)
         self.scan_summary = QLabel("Scan length and estimated time appear here after simulation.")
         scan_layout.addWidget(self.scan_summary)
@@ -343,7 +353,8 @@ class Window(QMainWindow):
 
     def filter_scan(self):
         try:
-            self.filtered = smooth(self.raw)
+            self.filtered = smooth(self.raw, self.median_window.currentData(),
+                                   self.average_window.currentData())
             self.scan_plot.filtered = self.filtered
             self.scan_plot.update()
             self.code.clear()
