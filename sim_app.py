@@ -162,6 +162,8 @@ class Window(QMainWindow):
         scan_range = QGridLayout()
         self.scan_start_x = number(0, -1000, 1000, 3, " mm")
         self.scan_end_x = number(230, -1000, 1000, 3, " mm")
+        self.scan_step = number(1, 0.01, 20, 2, " mm")
+        self.scan_speed = number(600, 1, 10000, 1, " mm/min")
         for row, (label, field) in enumerate((("X start (work)", self.scan_start_x),
                                               ("X end (work)", self.scan_end_x))):
             scan_range.addWidget(QLabel(label), row, 0)
@@ -169,7 +171,13 @@ class Window(QMainWindow):
             capture = QPushButton("Use current X")
             capture.clicked.connect(lambda _=False, target=field: self.capture_work_x(target))
             scan_range.addWidget(capture, row, 2)
+        scan_range.addWidget(QLabel("Scan step"), 2, 0)
+        scan_range.addWidget(self.scan_step, 2, 1)
+        scan_range.addWidget(QLabel("X scan speed"), 3, 0)
+        scan_range.addWidget(self.scan_speed, 3, 1)
         scan_layout.addLayout(scan_range)
+        self.scan_summary = QLabel("Scan length and estimated time appear here after simulation.")
+        scan_layout.addWidget(self.scan_summary)
         self.scan_plot = Plot()
         scan_layout.addWidget(self.scan_plot, 1)
         buttons = QHBoxLayout()
@@ -242,7 +250,6 @@ class Window(QMainWindow):
         settings = QWidget()
         form = QFormLayout(settings)
         self.radius = number(230, 10, 1000, 2, " mm")
-        self.scan_step = number(1, 0.1, 20, 2, " mm")
         self.sensor_x = number(0, -1000, 1000, 3, " mm")
         self.sensor_z = number(0, -1000, 1000, 3, " mm")
         self.tool_x = number(0, -1000, 1000, 3, " mm")
@@ -252,7 +259,7 @@ class Window(QMainWindow):
         self.y_position = number(0, -1000, 1000, 2, " mm")
         for label, widget in (
             ("Rim radius at scan start (G-code X0 at center)", self.radius),
-            ("Scan step", self.scan_step), ("Sensor X offset", self.sensor_x),
+            ("Sensor X offset", self.sensor_x),
             ("Sensor Z offset", self.sensor_z), ("Tool X offset", self.tool_x),
             ("Tool Z offset", self.tool_z), ("Safe Z clearance", self.safe_z),
             ("Maximum total cut depth", self.max_depth), ("Fixed Y table position", self.y_position),
@@ -321,8 +328,13 @@ class Window(QMainWindow):
             self.scan_plot.raw, self.scan_plot.filtered = self.raw, []
             self.scan_plot.update()
             self.code.clear()
+            estimate_sec = 60 * (self.scan_end_x.value() - self.scan_start_x.value()) / self.scan_speed.value()
+            self.scan_summary.setText(
+                f"Travel: {self.scan_end_x.value() - self.scan_start_x.value():.2f} mm  |  "
+                f"Samples: {len(self.raw)}  |  Estimated machine travel: {estimate_sec:.1f} s")
             self.statusBar().showMessage(
-                f"Synthetic scan X {self.scan_start_x.value():.3f} → {self.scan_end_x.value():.3f}: {len(self.raw)} points")
+                f"Synthetic scan X {self.scan_start_x.value():.3f} → {self.scan_end_x.value():.3f}: "
+                f"{len(self.raw)} points, estimated travel {estimate_sec:.1f} s at {self.scan_speed.value():.1f} mm/min")
         except ValueError as exc:
             QMessageBox.warning(self, "Scan", str(exc))
 
