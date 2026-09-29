@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView,
 )
 
-from profile import PassSpec, generate_gcode, load_csv, save_csv, simulated_scan, smooth
+from profile import PassSpec, generate_gcode, load_csv, save_csv, simulated_scan_range, smooth
 
 
 class Plot(QWidget):
@@ -142,7 +142,15 @@ class Window(QMainWindow):
         movement.addWidget(QLabel("X / Z"), 1, 1, alignment=Qt.AlignCenter)
         layout.addLayout(movement)
         root.addWidget(jog)
-        root.addWidget(QLabel("Y table position is fixed during scan and turning."))
+        table = QGroupBox("Table control (Y)")
+        table_layout = QVBoxLayout(table)
+        table_layout.addWidget(QLabel("Y is held at its set position during scanning and turning."))
+        for label, sign in (("Table Up (Y+)", 1), ("Table Down (Y−)", -1)):
+            button = QPushButton(label)
+            button.pressed.connect(lambda s=sign: self.jog_pressed("Y", s))
+            button.released.connect(self.jog_released)
+            table_layout.addWidget(button)
+        root.addWidget(table)
         root.addStretch()
         return pane
 
@@ -151,6 +159,17 @@ class Window(QMainWindow):
         scan = QWidget()
         scan_layout = QVBoxLayout(scan)
         scan_layout.addWidget(QLabel("<h2>Scan</h2>Synthetic laser data, outer edge toward center."))
+        scan_range = QGridLayout()
+        self.scan_start_x = number(0, -1000, 1000, 3, " mm")
+        self.scan_end_x = number(230, -1000, 1000, 3, " mm")
+        for row, (label, field) in enumerate((("X start (work)", self.scan_start_x),
+                                              ("X end (work)", self.scan_end_x))):
+            scan_range.addWidget(QLabel(label), row, 0)
+            scan_range.addWidget(field, row, 1)
+            capture = QPushButton("Use current X")
+            capture.clicked.connect(lambda _=False, target=field: self.capture_work_x(target))
+            scan_range.addWidget(capture, row, 2)
+        scan_layout.addLayout(scan_range)
         self.scan_plot = Plot()
         scan_layout.addWidget(self.scan_plot, 1)
         buttons = QHBoxLayout()
@@ -230,7 +249,7 @@ class Window(QMainWindow):
         self.max_depth = number(0.5, 0.001, 10, 3, " mm")
         self.y_position = number(0, -1000, 1000, 2, " mm")
         for label, widget in (
-            ("Rim radius (X0 at spindle center)", self.radius),
+            ("Rim radius at scan start (G-code X0 at center)", self.radius),
             ("Scan step", self.scan_step), ("Sensor X offset", self.sensor_x),
             ("Sensor Z offset", self.sensor_z), ("Tool X offset", self.tool_x),
             ("Tool Z offset", self.tool_z), ("Safe Z clearance", self.safe_z),
@@ -294,14 +313,19 @@ class Window(QMainWindow):
 
     def scan(self):
         try:
-            self.raw = simulated_scan(self.radius.value(), self.scan_step.value())
+            self.raw = simulated_scan_range(self.scan_start_x.value(), self.scan_end_x.value(),
+                                            self.scan_step.value(), self.radius.value())
             self.filtered = []
             self.scan_plot.raw, self.scan_plot.filtered = self.raw, []
             self.scan_plot.update()
             self.code.clear()
-            self.statusBar().showMessage(f"Synthetic scan: {len(self.raw)} points")
+            self.statusBar().showMessage(
+                f"Synthetic scan X {self.scan_start_x.value():.3f} → {self.scan_end_x.value():.3f}: {len(self.raw)} points")
         except ValueError as exc:
             QMessageBox.warning(self, "Scan", str(exc))
+
+    def capture_work_x(self, target):
+        target.setValue(self.machine["X"] - self.offset["X"])
 
     def filter_scan(self):
         try:
