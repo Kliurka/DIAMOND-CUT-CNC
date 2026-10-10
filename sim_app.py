@@ -84,8 +84,11 @@ def number(value, minimum, maximum, decimals=2, suffix=""):
 
 
 class Window(QMainWindow):
-    def __init__(self, native_preview_factory=None):
+    def __init__(self, native_preview_factory=None, machine_backend=None):
         super().__init__()
+        self.backend = machine_backend
+        self.live_state = None
+        self.control_error = ""
         self.native_preview_factory = native_preview_factory
         self.setWindowTitle("Diamond Cut CNC — Simulation")
         self.resize(1280, 790)
@@ -106,13 +109,25 @@ class Window(QMainWindow):
         self.setCentralWidget(split)
         self.update_dros()
         self.statusBar().showMessage("SIMULATION ONLY — no machine or sensor connected")
+        if self.backend is not None:
+            self.setWindowTitle("Diamond Cut CNC — LinuxCNC control")
+            self.continuous.setChecked(True)
+            self.continuous.toggled.connect(lambda: self.control_action(self.backend.stop_jog))
+            self.statusBar().showMessage("Real LinuxCNC manual axes — laser scan is synthetic; G-code is preview only")
+            self.machine_timer = QTimer(self)
+            self.machine_timer.setInterval(100)
+            self.machine_timer.timeout.connect(self.refresh_machine)
+            self.machine_timer.start()
+            QApplication.instance().applicationStateChanged.connect(self.application_state_changed)
+            self.refresh_machine()
 
     def build_controls(self):
         pane = QWidget()
         pane.setMinimumWidth(240)
         pane.setMaximumWidth(420)
         root = QVBoxLayout(pane)
-        root.addWidget(QLabel("<h2>Machine control</h2><b>SIMULATION ONLY</b>"))
+        root.addWidget(QLabel("<h2>Machine control</h2><b>" +
+                             ("LINUXCNC — REAL AXES" if self.backend else "SIMULATION ONLY") + "</b>"))
         group = QGroupBox("Position (mm)")
         grid = QGridLayout(group)
         for col, label in enumerate(("Axis", "Machine", "Work")):
@@ -125,26 +140,50 @@ class Window(QMainWindow):
             grid.addWidget(self.dros[axis][1], row, 2)
         root.addWidget(group)
         zeros = QHBoxLayout()
+        self.zero_buttons = []
         for axis in ("X", "Z"):
             button = QPushButton(f"Zero Work {axis}")
             button.clicked.connect(lambda _=False, a=axis: self.zero(a))
             zeros.addWidget(button)
+            self.zero_buttons.append(button)
         root.addLayout(zeros)
         reset = QPushButton("Reset / E-stop")
         reset.clicked.connect(self.toggle_estop)
         root.addWidget(reset)
+        if self.backend:
+            power_row = QHBoxLayout()
+            self.power_button = QPushButton("Machine ON")
+            self.power_button.clicked.connect(lambda: self.control_action(self.backend.toggle_power))
+            power_row.addWidget(self.power_button)
+            stop = QPushButton("STOP")
+            stop.setStyleSheet("background: #b00020; color: white; font-weight: bold")
+            stop.clicked.connect(lambda: self.control_action(self.backend.stop))
+            power_row.addWidget(stop)
+            root.addLayout(power_row)
         self.estop_label = QLabel()
+        self.estop_label.setWordWrap(True)
         root.addWidget(self.estop_label)
-        machine_home = QPushButton("Home Machine (simulated)")
+        machine_home = QPushButton("Home All" if self.backend else "Home Machine (simulated)")
+        self.home_button = machine_home
         machine_home.clicked.connect(self.home_machine)
         root.addWidget(machine_home)
         work_home = QPushButton("Go to Work Home (simulated)")
         work_home.clicked.connect(self.go_work_home)
         root.addWidget(work_home)
+        if self.backend:
+            work_home.setText("Work-home move: not configured")
+            work_home.setEnabled(False)
+            work_home.setToolTip("Requires verified clearance and machine geometry")
         jog = QGroupBox("Jog X / Z")
         layout = QVBoxLayout(jog)
         self.continuous = QCheckBox("Continuous (hold button)")
         layout.addWidget(self.continuous)
+        if self.backend:
+            speed_row = QHBoxLayout()
+            speed_row.addWidget(QLabel("Jog speed"))
+            self.jog_speed = number(30, 0.1, min(self.backend.limits.values()) * 60, 1, " mm/min")
+            speed_row.addWidget(self.jog_speed)
+            layout.addLayout(speed_row)
         steps = QHBoxLayout()
         self.step_group = QButtonGroup(self)
         for index, value in enumerate((0.01, 0.1, 1, 5, 10)):
@@ -156,12 +195,14 @@ class Window(QMainWindow):
                 radio.setChecked(True)
         layout.addLayout(steps)
         movement = QGridLayout()
+        self.jog_buttons = []
         for row, col, axis, sign in ((0, 1, "Z", 1), (2, 1, "Z", -1),
                                      (1, 0, "X", -1), (1, 2, "X", 1)):
             button = QPushButton(f"{axis}{'+' if sign > 0 else '−'}")
             button.pressed.connect(lambda a=axis, s=sign: self.jog_pressed(a, s))
             button.released.connect(self.jog_released)
             movement.addWidget(button, row, col)
+            self.jog_buttons.append(button)
         movement.addWidget(QLabel("X / Z"), 1, 1, alignment=Qt.AlignCenter)
         layout.addLayout(movement)
         root.addWidget(jog)
@@ -173,6 +214,7 @@ class Window(QMainWindow):
             button.pressed.connect(lambda s=sign: self.jog_pressed("Y", s))
             button.released.connect(self.jog_released)
             table_layout.addWidget(button)
+            self.jog_buttons.append(button)
         root.addWidget(table)
         root.addStretch()
         return pane
@@ -305,34 +347,52 @@ class Window(QMainWindow):
         return tabs
 
     def update_dros(self):
+        if self.backend is not None:
+            return
         for axis, (machine, work) in self.dros.items():
             machine.setText(f"{self.machine[axis]:+.4f}")
             work.setText(f"{self.machine[axis] - self.offset.get(axis, 0):+.4f}")
         self.estop_label.setText("RESET REQUIRED" if self.estop else "Simulated control enabled")
 
     def toggle_estop(self):
+        if self.backend is not None:
+            self.control_action(self.backend.toggle_estop)
+            return
         self.estop = not self.estop
         if self.estop:
             self.jog_released()
         self.update_dros()
 
     def zero(self, axis):
+        if self.backend is not None:
+            self.control_action(lambda: self.backend.zero(axis))
+            return
         if self.estop: return
         self.offset[axis] = self.machine[axis]
         self.update_dros()
 
     def home_machine(self):
+        if self.backend is not None:
+            self.control_action(self.backend.home_all)
+            return
         if self.estop: return
         self.machine.update(X=0.0, Z=0.0, Y=0.0)
         self.update_dros()
 
     def go_work_home(self):
+        if self.backend is not None:
+            return
         if self.estop: return
         self.machine["Z"] = self.offset["Z"] + self.safe_z.value()
         self.machine["X"] = self.offset["X"]
         self.update_dros()
 
     def jog_pressed(self, axis, sign):
+        if self.backend is not None:
+            selected = self.step_group.checkedButton()
+            distance = None if self.continuous.isChecked() else selected.property("step")
+            self.control_action(lambda: self.backend.jog(axis, sign, self.jog_speed.value(), distance))
+            return
         if self.estop:
             return
         if self.continuous.isChecked():
@@ -346,15 +406,87 @@ class Window(QMainWindow):
                 self.update_dros()
 
     def jog_released(self):
+        if self.backend is not None:
+            if self.continuous.isChecked():
+                self.control_action(self.backend.stop_jog)
+            return
         self.jog_timer.stop()
         self.jog_axis = None
 
     def continuous_tick(self):
+        if self.backend is not None:
+            return
         if self.estop or self.jog_axis is None or not self.continuous.isChecked():
             self.jog_released()
             return
         self.machine[self.jog_axis] += self.jog_sign * 0.8  # 10 mm/s, 80 ms simulated tick
         self.update_dros()
+
+    def control_action(self, action):
+        try:
+            action()
+            self.control_error = ""
+        except Exception as exc:
+            self.control_error = str(exc)
+            self.statusBar().showMessage(f"LinuxCNC command failed: {exc}")
+        self.refresh_machine()
+
+    def refresh_machine(self):
+        try:
+            state = self.backend.snapshot()
+            self.live_state = state
+            self.machine = state["machine"]
+            self.offset = {a: state["machine"][a] - state["work"][a] for a in ("X", "Y", "Z")}
+            for axis, (machine, work) in self.dros.items():
+                machine.setText(f"{state['machine'][axis]:+.4f}")
+                work.setText(f"{state['work'][axis]:+.4f}")
+            label = ("ESTOP — reset required" if state["estop"] else
+                     "Machine ON" if state["on"] else "Machine OFF")
+            label += " | Homed" if state["homed"] else " | Not homed"
+            if state["homing"]:
+                label += " | Homing"
+            if not state["healthy"]:
+                label += " | Mesa communication fault"
+            if self.control_error:
+                label += "\n" + self.control_error
+            self.estop_label.setText(label)
+            self.power_button.setText("Machine OFF" if state["on"] else "Machine ON")
+            ready = state["ready"]
+            for button in self.zero_buttons:
+                button.setEnabled(ready and state["homed"] and state["stationary"])
+            self.home_button.setEnabled(ready and state["stationary"])
+        except Exception as exc:
+            self.live_state = None
+            ready = False
+            self.estop_label.setText(f"LinuxCNC unavailable: {exc}")
+            for machine, work in self.dros.values():
+                machine.setText("UNKNOWN")
+                work.setText("UNKNOWN")
+            for button in self.zero_buttons + [self.home_button]:
+                button.setEnabled(False)
+            try:
+                self.backend.stop_jog()
+            except Exception:
+                pass
+        for button in self.jog_buttons:
+            button.setEnabled(ready)
+
+    def application_state_changed(self, state):
+        if self.backend is not None and state != Qt.ApplicationActive:
+            self.control_action(self.backend.stop_jog)
+
+    def shutdown(self):
+        if self.backend is not None:
+            self.machine_timer.stop()
+            self.backend.stop()
+
+    def closeEvent(self, event):
+        if self.backend is not None:
+            try:
+                self.shutdown()
+            except Exception as exc:
+                self.statusBar().showMessage(f"Stop failed: {exc}")
+        super().closeEvent(event)
 
     def scan(self):
         try:
@@ -375,6 +507,12 @@ class Window(QMainWindow):
             QMessageBox.warning(self, "Scan", str(exc))
 
     def capture_work_x(self, target):
+        if self.backend is not None:
+            self.refresh_machine()
+            if self.live_state is None:
+                return
+            target.setValue(self.live_state["work"]["X"])
+            return
         target.setValue(self.machine["X"] - self.offset["X"])
 
     def filter_scan(self):
@@ -496,3 +634,4 @@ if __name__ == "__main__":
     window = Window()
     window.show()
     sys.exit(app.exec_())
+
