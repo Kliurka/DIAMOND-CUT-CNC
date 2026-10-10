@@ -29,7 +29,7 @@ class HandlerClass:
         self.mesa_panel = MesaIOPanel(hal.get_value, self.panel, writer=hal.set_p)
         tabs = self.panel.centralWidget().widget(1)
         tabs.addTab(self.mesa_panel, "4. Mesa I/O")
-        self.panel.statusBar().showMessage("Motion and scanning simulated — see Mesa I/O for board status")
+        self.panel.statusBar().showMessage("Axis controls and laser scan simulated — real bench controls in Mesa I/O")
 
     def make_graphics(self, parent):
         widget = GCodeGraphics(parent)
@@ -38,6 +38,10 @@ class HandlerClass:
         # Register this dynamically created graphics widget through the supported path.
         widget.hal_init(HAL_NAME="diamondcut_gcode")
         return widget
+
+    def closing_cleanup__(self):
+        if hasattr(self, "mesa_panel"):
+            self.mesa_panel.shutdown()
 
 
 def get_handlers(halcomp, widgets, paths):
