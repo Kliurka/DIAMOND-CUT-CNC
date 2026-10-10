@@ -1,6 +1,6 @@
 # DIAMOND-CUT-CNC
 
-English-language prototype for a LinuxCNC wheel rim scanning and decorative turning workflow. **This first version is a desktop simulator only. It does not connect to LinuxCNC, the laser, spindle or motors. Do not run its generated G-code on a machine without configuring, inspecting and dry-running it.**
+English-language prototype for a LinuxCNC wheel rim scanning and decorative turning workflow. Motion and laser scanning are simulated. The QtVCP screen can monitor real Mesa 7i96S I/O using the bench configuration below. It does not enable motors or command a real spindle. Do not run generated G-code on a machine without configuring, inspecting and dry-running it.
 
 ## Run
 
@@ -28,7 +28,7 @@ The median window removes isolated spikes; the optional mean window (1 = off) fu
 
 The G-code generator currently offers G97/G94 or G96/G95. G95 requires actual spindle speed feedback in LinuxCNC. All generated moves are tagged as unverified, and the generator rejects passes deeper than the configured limit. Real spindle feedback, sensor acquisition, machine homing and safe travel are future hardware steps.
 
-The Turning tab has G-code text on the left and LinuxCNC's **actual QtVCP GCodeGraphics** on the right when the `diamondcut` QtVCP screen is launched by LinuxCNC. Standalone `python3 sim_app.py` deliberately shows an explanatory placeholder. The QtVCP handler dynamically registers the native widget with QtVCP, then loads the generated G-code into it. This integration has **not yet been verified in a LinuxCNC runtime**. The left control panel remains simulated even when launched as a QtVCP screen.
+The Turning tab has G-code text on the left and LinuxCNC's **actual QtVCP GCodeGraphics** on the right when the `diamondcut` QtVCP screen is launched by LinuxCNC. Standalone `python3 sim_app.py` deliberately shows an explanatory placeholder. The QtVCP handler dynamically registers the native widget with QtVCP, then loads the generated G-code into it. The native preview has been verified on LinuxCNC 2.9.10. The left control panel remains simulated even when launched as a QtVCP screen.
 
 ## Native QtVCP preview in a LinuxCNC simulation
 
@@ -53,3 +53,18 @@ Generate the preview from the Turning tab. The native widget should occupy the r
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+## Mesa 7i96S I/O bench monitor
+
+Close LinuxCNC and exit any halrun session before starting. Use the original working lathe simulation, not an existing preview directory or a real machine configuration:
+
+```bash
+python3 tools/setup_mesa_io.py --source ~/linuxcnc/configs/sim.axis/lathe.ini --ip 10.10.10.10
+linuxcnc ~/linuxcnc/configs/diamondcut-mesa-io/lathe.ini
+```
+
+The new destination must not exist. The source and existing diamondcut-preview configuration are preserved. Old source post-GUI HAL and PyVCP configuration are disabled in the copy. Mesa runs on a separate 10 ms bench thread with a 100 ms watchdog; these values are not a production motion configuration.
+
+Tab **4. Mesa I/O** polls HAL every 100 ms and shows INPUT0–INPUT10, output command states, packet-error count and watchdog status. Faulted or missing data is shown as UNKNOWN. Output states are commands, not physical feedback; the panel is read-only. In the original simulation preview the monitor reports Mesa unavailable. The left motion controls and scan acquisition remain simulated in all configurations.
+
+Input bench test: with power off, wire the 5 V supply ground to TB3-12 (INPUT COMMON), and +5 V through a switch to TB3-1 (INPUT0). With the screen running, the physical input indicator and the INPUT0 row should change together. VirtualBox is for bench communication/I/O checks; its timing is not validated for real machine motion. Real Mesa writes, OUT0 indication and INPUT0 reads have been verified manually on the user's board; the new GUI monitor still needs that hardware acceptance check.
