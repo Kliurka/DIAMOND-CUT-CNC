@@ -20,31 +20,54 @@ class Plot(QWidget):
     def __init__(self):
         super().__init__()
         self.raw, self.filtered = [], []
+        self.exaggerate_z = False
         self.setMinimumSize(430, 300)
+
+    def set_exaggerate_z(self, enabled):
+        self.exaggerate_z = enabled
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#161e29"))
-        bounds = self.rect().adjusted(56, 24, -20, -48)
+        bounds = self.rect().adjusted(70, 36, -24, -56)
         painter.setPen(QColor("#8996a7"))
         painter.drawRect(bounds)
-        painter.drawText(bounds.left(), self.height() - 12, "Outer edge  →  spindle center (X)")
+        painter.drawText(bounds.left(), self.height() - 12, "Distance from outer edge toward center (X, mm)")
         if not self.raw:
             painter.drawText(bounds, Qt.AlignCenter, "Run simulated scan")
             return
         points = self.raw + self.filtered
-        x_max = max(s.edge_mm for s in points) or 1
+        x_min = min(s.edge_mm for s in points)
+        x_max = max(s.edge_mm for s in points)
         z_min = min(s.z_mm for s in points) - 0.2
         z_max = max(s.z_mm for s in points) + 0.2
+        x_span = max(x_max - x_min, 0.001)
+        z_span = max(z_max - z_min, 0.001)
+        if self.exaggerate_z:
+            scale_x = bounds.width() / x_span
+            scale_z = bounds.height() / z_span
+        else:
+            scale_x = scale_z = min(bounds.width() / x_span, bounds.height() / z_span)
+        # Center the data while using identical pixels per mm in the true-scale view.
+        x_center = (x_min + x_max) / 2
+        z_center = (z_min + z_max) / 2
         for series, color in ((self.raw, "#f27373"), (self.filtered, "#53bfff")):
             painter.setPen(QPen(QColor(color), 2))
             prev = None
             for sample in series:
-                x = bounds.left() + sample.edge_mm / x_max * bounds.width()
-                y = bounds.bottom() - (sample.z_mm - z_min) / (z_max - z_min) * bounds.height()
-                if prev:
+                x = bounds.center().x() + (sample.edge_mm - x_center) * scale_x
+                y = bounds.center().y() - (sample.z_mm - z_center) * scale_z
+                if prev is not None:
                     painter.drawLine(round(prev[0]), round(prev[1]), round(x), round(y))
                 prev = x, y
+        painter.setPen(QColor("#8996a7"))
+        painter.drawText(bounds.left(), bounds.bottom() + 20, f"{x_min:.2f}")
+        painter.drawText(bounds.right() - 65, bounds.bottom() + 20, f"{x_max:.2f}")
+        ratio = scale_z / scale_x
+        caption = f"Z magnified {ratio:.1f}x" if self.exaggerate_z else "X:Z = 1:1 (same mm scale)"
+        painter.drawText(bounds.left(), bounds.top() - 10,
+                         f"{caption}   |   Z data: {min(s.z_mm for s in points):.3f} to {max(s.z_mm for s in points):.3f} mm")
         painter.setPen(QColor("#f27373"))
         painter.drawText(bounds.left() + 10, bounds.top() + 20, "Raw")
         painter.setPen(QColor("#53bfff"))
@@ -190,6 +213,9 @@ class Window(QMainWindow):
         scan_layout.addWidget(self.scan_summary)
         self.scan_plot = Plot()
         scan_layout.addWidget(self.scan_plot, 1)
+        self.scan_z_detail = QCheckBox("Magnify Z for surface detail (changes display only)")
+        self.scan_z_detail.toggled.connect(self.scan_plot.set_exaggerate_z)
+        scan_layout.addWidget(self.scan_z_detail)
         buttons = QHBoxLayout()
         for label, callback in (("Run simulated scan", self.scan), ("Smooth profile", self.filter_scan),
                                 ("Save raw CSV", self.save_raw), ("Save smoothed CSV", self.save_smoothed)):
