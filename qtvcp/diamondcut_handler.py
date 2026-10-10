@@ -26,7 +26,7 @@ class HandlerClass:
         self.panel.show()
         import hal
         from mesa_io import MesaIOPanel
-        self.mesa_panel = MesaIOPanel(hal.get_value, self.panel)
+        self.mesa_panel = MesaIOPanel(hal.get_value, self.panel, writer=hal.set_p)
         tabs = self.panel.centralWidget().widget(1)
         tabs.addTab(self.mesa_panel, "4. Mesa I/O")
         self.panel.statusBar().showMessage("Motion and scanning simulated — see Mesa I/O for board status")
@@ -42,3 +42,4 @@ class HandlerClass:
 
 def get_handlers(halcomp, widgets, paths):
     return [HandlerClass(halcomp, widgets, paths)]
+
