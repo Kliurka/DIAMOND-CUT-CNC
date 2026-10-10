@@ -1,6 +1,6 @@
 # DIAMOND-CUT-CNC
 
-English-language prototype for a LinuxCNC wheel rim scanning and decorative turning workflow. Motion and laser scanning are simulated. The QtVCP screen can monitor real Mesa 7i96S I/O using the bench configuration below. It does not enable motors or command a real spindle. Do not run generated G-code on a machine without configuring, inspecting and dry-running it.
+English-language prototype for a LinuxCNC wheel rim scanning and decorative turning workflow. Left axis controls and laser scanning are simulated. The QtVCP screen offers real Mesa 7i96S I/O and a dedicated STEPGEN0 free-motor bench test using the configuration below. Coordinated machine motion and real spindle control are not implemented. Do not run generated G-code on a machine without configuring, inspecting and dry-running it.
 
 ## Run
 
@@ -46,7 +46,7 @@ python3 tools/setup_qtvcp_preview.py --source ~/linuxcnc/configs/your-simulation
 
 The script creates `~/linuxcnc/configs/diamondcut-preview`, copies the source simulation configuration and its related files, links this repository's QtVCP files, and changes `DISPLAY`, `LATHE`, and `GEOMETRY` in the **copy**. It prints the exact `linuxcnc` launch command. If you have no simulation INI yet, first create and run one with LinuxCNC's configuration selector; do not use your real machine INI. The destination must not already exist.
 
-Generate the preview from the Turning tab. The native widget should occupy the right half of the preview area. If the QtVCP screen fails to start, collect the terminal output and LinuxCNC version. The project has no real HAL motor or laser wiring yet.
+Generate the preview from the Turning tab. The native widget should occupy the right half of the preview area. If the QtVCP screen fails to start, collect the terminal output and LinuxCNC version. Real HAL bench I/O and STEPGEN0 controls are available only in the Mesa configuration below; laser acquisition and coordinated axis motion are not implemented.
 
 ## Tests
 
@@ -67,4 +67,14 @@ The new destination must not exist. The source and existing diamondcut-preview c
 
 Tab **4. Mesa I/O** polls HAL every 100 ms and shows INPUT0–INPUT10, output command states, packet-error count and watchdog status. Faulted or missing data is shown as UNKNOWN. Output states are commands, not physical feedback. OUT0–OUT5 checkboxes directly send HAL commands; an All outputs OFF button attempts all six OFF commands. Checkboxes follow external HAL changes without writing during refresh. ON commands are blocked while current communication/watchdog faults are active; failures are reported in the panel. In the original simulation preview the monitor reports Mesa unavailable. The left motion controls and scan acquisition remain simulated in all configurations.
 
-Input bench test: with power off, wire the 5 V supply ground to TB3-12 (INPUT COMMON), and +5 V through a switch to TB3-1 (INPUT0). With the screen running, the physical input indicator and the INPUT0 row should change together. VirtualBox is for bench communication/I/O checks; its timing is not validated for real machine motion. Real Mesa writes, OUT0 indication and INPUT0 reads have been verified manually on the user's board; the new GUI monitor still needs that hardware acceptance check.
+Input bench test: with power off, wire the 5 V supply ground to TB3-12 (INPUT COMMON), and +5 V through a switch to TB3-1 (INPUT0). With the screen running, the physical input indicator and the INPUT0 row should change together. VirtualBox is for bench communication/I/O checks; its timing is not validated for real machine motion. Real Mesa writes, OUT0 indication and INPUT0 reads have been verified manually on the user's board; the GUI input/output controls have also been checked on that board. STEPGEN0 pulses and a DM542 motor running both directions have been verified with manual HAL commands; the new GUI motor controls still need hardware acceptance testing.
+
+## STEPGEN0 motor controls in the Mesa tab
+
+For an existing `diamondcut-mesa-io` setup, close LinuxCNC, run `git pull` in this repository, and launch the same INI again. No configuration regeneration is needed.
+
+Tab **4. Mesa I/O** now includes a pulse-rate field (1–2000 pulses/s, default 500), **Forward (hold)**, **Reverse (hold)** and **STOP motor**. Hold a direction button to generate pulses; releasing it stops and disables STEPGEN0. The interface configures velocity mode, scale 1 pulse/unit, 5 µs step length/space, 10 µs direction setup/hold, maximum velocity 2000 and acceleration 10000. At the tested DM542 setting of 1600 pulses/revolution, 500 pulses/s is about 18.75 RPM.
+
+Changing tabs, application deactivation, closing the screen or a detected communication fault requests motor stop. Recovery never automatically restarts it. Stopping STEPGEN0 disables pulse generation; it does not remove DM542 holding current when ENA is unwired. **All outputs OFF** addresses only OUT0–OUT5; use **STOP motor** for STEPGEN0. The left axis jog and E-stop controls still affect the simulator and do not control this bench motor. This panel is for a free motor on the bench with the existing VirtualBox test setup, not coordinated machine movement.
+
+The controller command sequence, reverse direction, fault rejection and cleanup paths have eight standard-library regression tests. Qt event behavior and the integrated controls must be verified on the LinuxCNC desktop.
