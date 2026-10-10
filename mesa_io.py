@@ -46,7 +46,7 @@ def read_snapshot(reader):
 
 
 class MesaIOPanel(QWidget):
-    def __init__(self, reader, parent=None, writer=None):
+    def __init__(self, reader, parent=None, writer=None, allow_bench=True):
         super().__init__(parent)
         self.reader = reader
         self.writer = writer
@@ -54,7 +54,8 @@ class MesaIOPanel(QWidget):
         layout = QVBoxLayout(self)
         title = QLabel("<h2>Mesa 7i96S — I/O monitor</h2>")
         layout.addWidget(title)
-        layout.addWidget(QLabel("Real I/O and STEPGEN0 bench test. Left axis controls and laser scan are simulated."))
+        layout.addWidget(QLabel("Real I/O and STEPGEN0 bench test. Left axis controls and laser scan are simulated."
+                               if allow_bench else "Real axes use LinuxCNC. Mesa I/O is read-only in this configuration."))
         self.status = QLabel("Waiting for HAL")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -90,6 +91,7 @@ class MesaIOPanel(QWidget):
         self.motor_status.setWordWrap(True)
         motor_layout.addWidget(self.motor_status)
         layout.addWidget(motor)
+        motor.setVisible(allow_bench)
         self.table = QTableWidget(17, 4)
         self.table.setHorizontalHeaderLabels(["Signal", "TB3 terminals", "State", "Output control"])
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
