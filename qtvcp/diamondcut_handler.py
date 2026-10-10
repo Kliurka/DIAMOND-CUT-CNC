@@ -24,6 +24,12 @@ class HandlerClass:
         self.panel.setWindowFlags(Qt.Widget)
         self.w.screenHost.layout().addWidget(self.panel)
         self.panel.show()
+        import hal
+        from mesa_io import MesaIOPanel
+        self.mesa_panel = MesaIOPanel(hal.get_value, self.panel)
+        tabs = self.panel.centralWidget().widget(1)
+        tabs.addTab(self.mesa_panel, "4. Mesa I/O")
+        self.panel.statusBar().showMessage("Motion and scanning simulated — see Mesa I/O for board status")
 
     def make_graphics(self, parent):
         widget = GCodeGraphics(parent)
