@@ -1,7 +1,9 @@
 """Mesa I/O monitor and manual bench output controls for QtVCP."""
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QTableWidget,
-                            QTableWidgetItem, QCheckBox, QPushButton)
+                            QTableWidgetItem, QCheckBox, QPushButton,
+                            QGroupBox, QHBoxLayout, QSpinBox, QApplication)
+from bench_stepgen import BenchStepgen, STEPGEN
 
 PREFIX = "hm2_7i96s.0"
 
@@ -48,15 +50,46 @@ class MesaIOPanel(QWidget):
         super().__init__(parent)
         self.reader = reader
         self.writer = writer
+        self.stepgen = BenchStepgen(writer, lambda: read_snapshot(self.reader)["healthy"])
         layout = QVBoxLayout(self)
         title = QLabel("<h2>Mesa 7i96S — I/O monitor</h2>")
         layout.addWidget(title)
-        layout.addWidget(QLabel("Real board inputs. Motion and laser scanning remain simulated."))
+        layout.addWidget(QLabel("Real I/O and STEPGEN0 bench test. Left axis controls and laser scan are simulated."))
         self.status = QLabel("Waiting for HAL")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.errors = QLabel()
         layout.addWidget(self.errors)
+        motor = QGroupBox("STEPGEN0 — free motor bench test")
+        motor_layout = QVBoxLayout(motor)
+        fields = QHBoxLayout()
+        fields.addWidget(QLabel("Pulse rate"))
+        self.pulse_rate = QSpinBox()
+        self.pulse_rate.setRange(1, 2000)
+        self.pulse_rate.setValue(500)
+        self.pulse_rate.setSuffix(" pulses/s")
+        fields.addWidget(self.pulse_rate)
+        fields.addWidget(QLabel("5 µs pulses; DM542: 1600 pulses/rev"))
+        motor_layout.addLayout(fields)
+        buttons = QHBoxLayout()
+        self.motor_buttons = []
+        for label, direction in (("Reverse (hold)", -1), ("Forward (hold)", 1)):
+            button = QPushButton(label)
+            button.setAutoRepeat(False)
+            button.setEnabled(False)
+            button.pressed.connect(lambda d=direction: self.start_motor(d))
+            button.released.connect(self.stop_motor)
+            buttons.addWidget(button)
+            self.motor_buttons.append(button)
+        self.motor_stop = QPushButton("STOP motor")
+        self.motor_stop.setStyleSheet("background: #b00020; color: white; font-weight: bold")
+        self.motor_stop.clicked.connect(self.stop_motor)
+        buttons.addWidget(self.motor_stop)
+        motor_layout.addLayout(buttons)
+        self.motor_status = QLabel("Stopped — hold a direction button to run")
+        self.motor_status.setWordWrap(True)
+        motor_layout.addWidget(self.motor_status)
+        layout.addWidget(motor)
         self.table = QTableWidget(17, 4)
         self.table.setHorizontalHeaderLabels(["Signal", "TB3 terminals", "State", "Output control"])
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -91,7 +124,58 @@ class MesaIOPanel(QWidget):
         self.timer.setInterval(100)
         self.timer.timeout.connect(self.refresh)
         self.timer.start()
+        app = QApplication.instance()
+        if app is not None:
+            app.applicationStateChanged.connect(self.application_state_changed)
         self.refresh()
+
+    def start_motor(self, direction):
+        try:
+            self.stepgen.start(direction, self.pulse_rate.value())
+            rpm = self.pulse_rate.value() * 60 / 1600
+            self.motor_status.setText(f"{'Forward' if direction > 0 else 'Reverse'}: "
+                                      f"{self.pulse_rate.value()} pulses/s (~{rpm:.2f} RPM at 1600 pulses/rev)")
+            self.pulse_rate.setEnabled(False)
+        except Exception as exc:
+            self.motor_status.setText(f"Motor start failed: {exc}")
+
+    def stop_motor(self):
+        stopped = True
+        try:
+            self.stepgen.stop()
+            self.motor_status.setText("Stopped — pulse generation disabled")
+        except Exception as exc:
+            stopped = False
+            self.motor_status.setText(f"Motor stop failed: {exc}")
+        self.pulse_rate.setEnabled(True)
+        return stopped
+
+    def application_state_changed(self, state):
+        if state != Qt.ApplicationActive and self.stepgen.active:
+            self.stop_motor()
+
+    def hideEvent(self, event):
+        if self.stepgen.active:
+            self.stop_motor()
+        super().hideEvent(event)
+
+    def shutdown(self):
+        self.timer.stop()
+        self.stop_motor()
+
+    def refresh_motor(self, healthy):
+        ready = healthy and self.writer is not None
+        try:
+            self.reader(STEPGEN + ".enable")
+        except Exception:
+            ready = False
+        if not ready and self.stepgen.active:
+            if self.stop_motor():
+                self.motor_status.setText("Motor stopped: Mesa/STEPGEN0 unavailable; release and press again after recovery")
+        for button in self.motor_buttons:
+            button.setEnabled(ready)
+        self.motor_stop.setEnabled(self.writer is not None)
+        self.pulse_rate.setEnabled(not self.stepgen.active)
 
     def set_output(self, index, enabled):
         try:
@@ -119,12 +203,14 @@ class MesaIOPanel(QWidget):
             self.status.setStyleSheet("color: #b00020")
             self.errors.setText("Packet errors: unavailable")
             self.show_states(None)
+            self.refresh_motor(False)
             return
         self.errors.setText(f"Packet errors since start: {snapshot['errors']}")
         self.status.setText(snapshot["status"])
         self.status.setStyleSheet("color: #18702b" if snapshot["healthy"] else "color: #b00020")
         values = snapshot["inputs"] + snapshot["outputs"] if snapshot["healthy"] else None
         self.show_states(values)
+        self.refresh_motor(snapshot["healthy"])
 
     def show_states(self, values):
         from PyQt5.QtGui import QColor
