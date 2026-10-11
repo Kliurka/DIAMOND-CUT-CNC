@@ -369,6 +369,11 @@ class Window(QMainWindow):
         if self.backend is not None:
             if not self.control_action(lambda: self.backend.zero(axis)):
                 QMessageBox.warning(self, "Work zero", self.control_error)
+            elif self.native_widget is not None:
+                try:
+                    self.native_widget.refresh_work_coordinates()
+                except Exception as exc:
+                    QMessageBox.warning(self, "Preview", f"Work zero set, but preview refresh failed: {exc}")
             return
         if self.estop: return
         self.offset[axis] = self.machine[axis]

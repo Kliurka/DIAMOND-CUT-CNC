@@ -104,6 +104,26 @@ class GraphicsTests(unittest.TestCase):
         for call in self.widget.hershey.plot_string.call_args_list:
             self.assertTrue(set(call.args[0]) <= supported)
 
+    def test_work_zero_reloads_same_file_after_status_poll_and_resets_view(self):
+        self.widget._reload_filename = '/tmp/preview.ngc'
+        events = []
+        self.widget.stat.poll = lambda: events.append('poll')
+        self.widget.clear_live_plotter = lambda: events.append('clear')
+        self.widget.load_program = lambda _, path: events.append(path)
+        self.widget.reset_default_view = lambda: events.append('view')
+        self.widget.refresh_work_coordinates()
+        self.assertEqual(events, ['poll', 'clear', '/tmp/preview.ngc', 'view'])
+        self.assertFalse(self.widget.get_show_live_plot())
+
+    def test_work_zero_without_program_only_clears_history_and_resets_view(self):
+        self.widget._reload_filename = None
+        self.widget.clear_live_plotter = MagicMock()
+        self.widget.load_program = MagicMock()
+        self.widget.reset_default_view = MagicMock()
+        self.widget.refresh_work_coordinates()
+        self.widget.load_program.assert_not_called()
+        self.widget.reset_default_view.assert_called_once_with()
+
 
 if __name__ == '__main__':
     unittest.main()

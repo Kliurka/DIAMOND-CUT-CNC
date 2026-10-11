@@ -18,6 +18,7 @@ class DiamondCutGraphics(GCodeGraphics):
         self.show_small_origin = False
         self.show_extents_option = False
         self.show_overlay = False
+        self.show_live_plot = False
         self.use_gradient_background = False
         self.setBackgroundColor(QColor(24, 27, 32))
 
@@ -25,6 +26,17 @@ class DiamondCutGraphics(GCodeGraphics):
     def get_show_tool(self):
         # Draw our opaque marker last, rather than the translucent stock cone.
         return False
+
+    def get_show_live_plot(self):
+        return False
+
+    def refresh_work_coordinates(self):
+        """Reparse the displayed file after a completed work-offset change."""
+        self.stat.poll()
+        self.clear_live_plotter()
+        if self._reload_filename:
+            self.load_program(None, self._reload_filename)
+        self.reset_default_view()
 
     def tool_tip(self):
         return tuple(a - b for a, b in zip(

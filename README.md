@@ -128,3 +128,9 @@ Pass depth is added to the scanned surface Z. Each rapid X move occurs at
 min(surface Z) minus safe clearance, above the entire profile. Regenerate the
 preview after updating; previously saved G-code retains its old Z signs.
 The legacy rim-radius API retains its historical +Z clearance convention.
+
+The preview hides the live tool-motion backplot (yellow jog trail); the yellow
+tool tip marker remains. After successful Zero Work X/Z, it polls the updated
+status, reloads the same displayed G-code to rebuild its offset-dependent
+geometry and restores the X/Z view. G-code values and the saved scan are not
+rewritten by touch-off. A rejected/failed zero command does not trigger reload.
