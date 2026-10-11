@@ -93,7 +93,7 @@ The script creates a separate `diamondcut-control.ini` beside the original INI, 
 
 The left panel displays **LINUXCNC — REAL AXES**. **Reset / E-stop** resets or asserts LinuxCNC E-stop; reset does not turn the machine on. **Machine ON/OFF** toggles machine power state. **STOP** stops this screen's jog and aborts current LinuxCNC activity. Continuous jog runs while holding a button and stops on release or application deactivation. With Continuous unchecked, pressing a button requests the selected increment; release does not cancel that increment, but STOP or application deactivation does. Speed is entered in mm/min and clamped to the axis velocity limit. Before homing it jogs the corresponding joint; in teleop mode it jogs the Cartesian axis. Communication faults disable jog controls, request stop and never restart motion on recovery.
 
-Machine and Work positions come from LinuxCNC status, including work, G92 and tool offsets and XY rotation. **Home All** uses the configured LinuxCNC homing sequence. The uploaded free-motor configuration has no connected home inputs or search/latch velocities, so it establishes the reference without searching for switches. Physical switch homing must be configured in PNCconf/INI/HAL with verified input channels, polarity, search direction, search/latch speeds and home offsets. Home All then invokes that configured procedure; the screen itself does not invent switch wiring or change homing parameters. **Zero Work X/Z** uses G10 L20 in the active work coordinate system and requires X and Z homed and motion stopped. The screen does not bypass homing or auto-home. Before homing, clicking Zero Work explains the required Home All step instead of silently disabling the button. After touch-off, the backend waits for the return to Manual mode before refreshing the controls. Y remains a manual table joint. The setup script excludes Y from Home All in diamondcut-control.ini and sets Z then X homing. It adds NO_FORCE_HOMING for MDI with unhomed Y; the screen independently gates work-zero commands on X/Z homing. Rerun the setup script after every PNCconf regeneration. Page Up/Down jog the table while held, except when editing fields. The handler exports table-lock (HAL bit input): TRUE stops and blocks Y jog. It is unconnected by default; the physical part-change-window signal must be wired before that interlock is active. The generated launch INI uses LATHE=1 and GEOMETRY=XZ for the preview. Work-home movement remains disabled until clearance and geometry are verified. Laser scan remains synthetic and generated G-code remains preview-only. In this mode Mesa I/O offers a password-protected maintenance test; direct bench STEPGEN0 controls are hidden; the screen never writes stepgen pins owned by LinuxCNC.
+Machine and Work positions come from LinuxCNC status, including work, G92 and tool offsets and XY rotation. **Home All** uses the configured LinuxCNC homing sequence. The uploaded free-motor configuration has no connected home inputs or search/latch velocities, so it establishes the reference without searching for switches. Physical switch homing must be configured in PNCconf/INI/HAL with verified input channels, polarity, search direction, search/latch speeds and home offsets. Home All then invokes that configured procedure; the screen itself does not invent switch wiring or change homing parameters. **Zero Work X/Z** uses G10 L20 in the active work coordinate system and requires X and Z homed and motion stopped. The screen does not bypass homing or auto-home. Before homing, clicking Zero Work explains the required Home All step instead of silently disabling the button. After touch-off, the backend waits for the return to Manual mode before refreshing the controls. Y remains a manual table joint. The setup script excludes Y from Home All in diamondcut-control.ini and sets Z then X homing. It adds NO_FORCE_HOMING for MDI with unhomed Y; the screen independently gates work-zero commands on X/Z homing. Rerun the setup script after every PNCconf regeneration. Page Up/Down jog the table while held, except when editing fields. The handler exports table-lock (HAL bit input): TRUE stops and blocks Y jog. It is unconnected by default; the physical part-change-window signal must be wired before that interlock is active. The generated launch INI uses LATHE=1 and GEOMETRY=XZ for the preview. Work-home movement remains disabled until clearance and geometry are verified. Laser scan remains synthetic. Generated G-code can be simulated graphically or executed with Run G-code. In this mode Mesa I/O offers a password-protected maintenance test; direct bench STEPGEN0 controls are hidden; the screen never writes stepgen pins owned by LinuxCNC.
 
 The user's VirtualBox free-motor test used SERVO_PERIOD = 10000000 ns, watchdog = 90000000 ns, and P = 100 for all three stepgen PID loops. These are bench settings, not validated machine timing. A 320 pulses/mm scale is provisional (1600 pulses/revolution with an assumed 5 mm/revolution); real mechanics require their actual scale. After changing PNCconf settings, test the original AXIS INI and rerun `setup_machine_qtvcp.py` to refresh the separate launch INI. PNCconf may regenerate manual timing/P edits, so keep those settings consistent in its project.
 
@@ -137,3 +137,30 @@ tool tip marker remains. After successful Zero Work X/Z, it polls the updated
 status, reloads the same displayed G-code to rebuild its offset-dependent
 geometry and restores the X/Z view. G-code values and the saved scan are not
 rewritten by touch-off. A rejected/failed zero command does not trigger reload.
+
+### G-code simulation and execution
+
+In **Toolpath & Turning**, load the smoothed CSV and configure the enabled pass
+rows. **Simulate G-code** regenerates the program and animates the yellow tool
+marker from the current Work X/Z position. It sends no motion or spindle commands.
+The speed multiplier affects only this graphical playback; rapid moves use an
+approximate 600 mm/min, feed moves use their programmed F values. Acceleration
+and spindle dynamics are not simulated. **Stop simulation** restores the actual
+tool marker. Simulation requires the native LinuxCNC QtVCP graph.
+
+**Run G-code** regenerates and saves a separate program snapshot, then opens it
+in LinuxCNC AUTO and starts from line 0, including all enabled passes and M3/M5
+spindle commands. It requires healthy Mesa communication, machine ON, idle Manual
+mode, stopped axes, homed X/Z, active G54 without XY rotation, and no maintenance
+output test or simulation. Y is not commanded and does not require homing.
+Every generated X/Z endpoint is checked against the current INI soft limits after
+applying G54/G92 offsets. The generated header cancels tool-length compensation
+with G49. Current Work-X programs use G97/G94; legacy CSS programs are not accepted
+by these new buttons.
+
+During execution, manual jog/home/work-zero controls are blocked and the screen
+shows the current program line. **STOP** aborts the program and switches the
+spindle off. Completion returns to Manual mode. Native LinuxCNC remains responsible
+for trajectory execution, limits and spindle control; the screen sends NML
+commands and never writes stepgen pins. Hardware execution still needs acceptance
+testing on the machine.

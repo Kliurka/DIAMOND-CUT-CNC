@@ -50,6 +50,18 @@ class GraphicsTests(unittest.TestCase):
     def tearDown(self):
         self.widget.close()
 
+    def test_simulation_marker_tracks_work_offsets_without_changing_status(self):
+        self.widget.updateGL = MagicMock()
+        actual = self.widget.stat.actual_position
+        self.widget.set_simulated_work_position((25.4, 2.54))
+        x, y, z = self.widget.tool_tip()
+        self.assertAlmostEqual(x, 2)
+        self.assertAlmostEqual(y, 0)
+        self.assertAlmostEqual(z, 2.1)
+        self.assertEqual(self.widget.stat.actual_position, actual)
+        self.widget.set_simulated_work_position(None)
+        self.assertEqual(self.widget.tool_tip(), (0, 0, 0))
+
     def test_work_origin_tracks_touch_off_and_rotated_g92(self):
         self.assertEqual(self.widget.work_origin(), (1, 0, 2))
         self.widget.stat.g5x_offset = (0, 0, 0)

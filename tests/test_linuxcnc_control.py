@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from linuxcnc_control import LinuxCNCControl
 
@@ -10,6 +12,8 @@ class Ini:
                      ("TRAJ", "LINEAR_UNITS"): "mm"}
         for a in "XYZ":
             self.data["AXIS_" + a, "MAX_VELOCITY"] = "1.5"
+            self.data["AXIS_" + a, "MIN_LIMIT"] = "-100"
+            self.data["AXIS_" + a, "MAX_LIMIT"] = "100"
 
     def find(self, section, key):
         return self.data.get((section, key))
@@ -30,7 +34,7 @@ class Commands:
 
 def make_backend():
     constants = dict(STATE_ON=4, STATE_OFF=3, STATE_ESTOP=1, STATE_ESTOP_RESET=2,
-                     MODE_MANUAL=1, MODE_MDI=3, INTERP_IDLE=1,
+                     MODE_MANUAL=1, MODE_MDI=3, MODE_AUTO=2, AUTO_RUN=0, SPINDLE_OFF=0, INTERP_IDLE=1,
                      TRAJ_MODE_FREE=1, TRAJ_MODE_TELEOP=3,
                      JOG_STOP=0, JOG_CONTINUOUS=1, JOG_INCREMENT=2, RCS_DONE=1)
     status = SimpleNamespace(task_state=4, task_mode=1, interp_state=1, motion_mode=1,
@@ -170,6 +174,84 @@ class ControlTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             b.stop()
         self.assertEqual(c.calls[-1], ("abort", ()))
+
+
+class ProgramTests(unittest.TestCase):
+    code = "G21 G90 G40 G49 G54 G8 G94\nG97 S1000\nM3\nF60\nG0 Z-2\nG0 X0\nG1 Z0.01\nG1 X10 Z0.02\nG0 Z-2\nM5\nM2\n"
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.path = Path(self.folder.name) / 'program.ngc'
+        self.path.write_text(self.code)
+        self.b, self.s, self.c = make_backend()
+        self.s.homed = (1, 0, 1)
+
+    def test_run_opens_full_program_then_starts_line_zero(self):
+        self.b.run_program(self.path)
+        self.assertEqual(self.c.calls, [('mode', (2,)), ('wait_complete', (1,)),
+            ('program_open', (str(self.path),)), ('wait_complete', (1,)), ('auto', (0, 0))])
+        self.assertTrue(self.b.program_running)
+        self.assertFalse(self.b.snapshot()['ready'])
+        with self.assertRaises(RuntimeError):
+            self.b.jog('Y', 1, 60)
+
+    def test_interlocks_block_without_start_commands(self):
+        for field, value in [('homed', (0, 0, 1)), ('inpos', False),
+                ('task_state', 3), ('task_mode', 2), ('interp_state', 2), ('rotation_xy', 90)]:
+            with self.subTest(field=field):
+                b, s, c = make_backend()
+                s.homed = (1, 0, 1)
+                setattr(s, field, value)
+                with self.assertRaises(RuntimeError):
+                    b.run_program(self.path)
+                self.assertEqual(c.calls, [])
+        self.b.output_test_active = True
+        with self.assertRaises(RuntimeError):
+            self.b.run_program(self.path)
+        self.assertEqual(self.c.calls, [])
+
+    def test_work_offsets_are_applied_to_soft_limits(self):
+        self.s.g5x_offset = (95, 0, 0)
+        with self.assertRaisesRegex(RuntimeError, 'X .* exceeds'):
+            self.b.run_program(self.path)
+        self.assertEqual(self.c.calls, [])
+
+    def test_load_failure_aborts_and_restores_manual(self):
+        self.c.results = [1, -1]
+        with self.assertRaisesRegex(RuntimeError, 'load failed'):
+            self.b.run_program(self.path)
+        self.assertNotIn(('auto', (0, 0)), self.c.calls)
+        self.assertEqual(self.c.calls[-2:], [('abort', ()), ('mode', (1,))])
+        self.assertFalse(self.b.program_running)
+
+    def test_health_rechecked_after_load(self):
+        checks = iter([True, False])
+        self.b.healthy = lambda: next(checks)
+        with self.assertRaisesRegex(RuntimeError, 'conditions changed'):
+            self.b.run_program(self.path)
+        self.assertNotIn(('auto', (0, 0)), self.c.calls)
+
+    def test_stop_aborts_and_stops_spindle(self):
+        self.b.run_program(self.path)
+        self.b.stop()
+        self.assertEqual(self.c.calls[-4:], [('abort', ()), ('spindle', (0,)),
+                                           ('wait_complete', (1,)), ('mode', (1,))])
+        self.assertFalse(self.b.program_running)
+
+    def test_completion_and_fault(self):
+        self.b.run_program(self.path)
+        self.s.interp_state = 2
+        self.b.snapshot()
+        self.s.interp_state = 1
+        self.b.snapshot()
+        self.assertFalse(self.b.program_running)
+        self.assertEqual(self.c.calls[-1], ('mode', (1,)))
+        self.b.run_program(self.path)
+        self.b.healthy = lambda: False
+        self.b.snapshot()
+        self.assertFalse(self.b.program_running)
+        self.assertIn(('spindle', (0,)), self.c.calls)
 
 
 if __name__ == "__main__":

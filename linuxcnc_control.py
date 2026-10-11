@@ -1,5 +1,9 @@
-"""Manual LinuxCNC control through NML; never writes Mesa stepgen pins."""
+"""LinuxCNC manual and AUTO control through NML; no direct stepgen writes."""
 import math
+from pathlib import Path
+import time
+
+from gcode_playback import parse_program
 
 AXES = "XYZ"
 
@@ -30,6 +34,9 @@ class LinuxCNCControl:
         self.table_locked = False
         self.output_test_active = False
         self.output_test_stop = None
+        self.program_running = False
+        self.program_seen_busy = False
+        self.program_started = 0
 
     def snapshot(self):
         self.stat.poll()
@@ -37,8 +44,16 @@ class LinuxCNCControl:
         healthy = bool(self.healthy())
         on = s.task_state == api.STATE_ON
         homing = any(j.get("homing", False) for j in s.joint[:3])
+        if self.program_running:
+            if not healthy or not on:
+                self.stop()
+            elif s.interp_state != api.INTERP_IDLE:
+                self.program_seen_busy = True
+            elif s.inpos and (self.program_seen_busy or time.monotonic() - self.program_started > 1):
+                self.cmd.mode(api.MODE_MANUAL)
+                self.program_running = False
         ready = (healthy and on and s.task_mode == api.MODE_MANUAL
-                 and s.interp_state == api.INTERP_IDLE and not homing)
+                 and s.interp_state == api.INTERP_IDLE and not homing and not self.program_running)
         test_ready = ready
         ready = ready and not self.output_test_active
         if self.active_jog is not None and not ready:
@@ -57,7 +72,8 @@ class LinuxCNCControl:
                 "on": on, "estop": s.task_state == api.STATE_ESTOP,
                 "homed": bool(s.homed[0] and s.homed[2]), "homing": homing, "stationary": bool(s.inpos),
                 "can_touch_off": bool(s.homed[0] and s.homed[2]), "table_locked": self.table_locked,
-                "test_ready": test_ready}
+                "test_ready": test_ready, "running": self.program_running,
+                "current_line": int(getattr(s, "motion_line", 0))}
 
     def require_ready(self, homed=False):
         state = self.snapshot()
@@ -131,6 +147,55 @@ class LinuxCNCControl:
                     self.output_test_stop()
             finally:
                 self.cmd.abort()
+                if self.program_running:
+                    try:
+                        self.cmd.spindle(self.api.SPINDLE_OFF)
+                    finally:
+                        self.program_running = False
+                        self.cmd.wait_complete(1)
+                        self.cmd.mode(self.api.MODE_MANUAL)
+
+    def run_program(self, path):
+        state = self.require_ready(homed=True)
+        if not state["stationary"] or self.active_jog is not None:
+            raise RuntimeError("Stop motion before Run")
+        if getattr(self.stat, "g5x_index", 1) != 1 or self.stat.rotation_xy != 0:
+            raise RuntimeError("Run requires G54 with zero XY rotation")
+        path = Path(path).resolve()
+        moves = parse_program(path.read_text(), start=(state["work"]["X"], state["work"]["Z"]))
+        for move in moves:
+            for axis, value, index in (("X", move.x, 0), ("Z", move.z, 2)):
+                low = self.ini.find("AXIS_" + axis, "MIN_LIMIT")
+                high = self.ini.find("AXIS_" + axis, "MAX_LIMIT")
+                if low is None or high is None:
+                    raise RuntimeError(f"Missing {axis} soft limits in INI")
+                # The generated header uses G49: no active tool-length offset.
+                machine = value + self.stat.g5x_offset[index] + self.stat.g92_offset[index]
+                if not float(low) <= machine <= float(high):
+                    raise RuntimeError(f"Line {move.line}: {axis} {machine:.4f} mm exceeds machine limits")
+        self.stop_jog()
+        try:
+            self.cmd.mode(self.api.MODE_AUTO)
+            if self.cmd.wait_complete(1) != self.api.RCS_DONE:
+                raise RuntimeError("AUTO mode switch failed")
+            self.cmd.program_open(str(path))
+            if self.cmd.wait_complete(1) != self.api.RCS_DONE:
+                raise RuntimeError("G-code load failed")
+            # Recheck interlocks just before issuing the start command.
+            self.stat.poll()
+            if (not self.healthy() or self.stat.task_state != self.api.STATE_ON
+                    or not self.stat.inpos or not (self.stat.homed[0] and self.stat.homed[2])
+                    or self.output_test_active or self.stat.interp_state != self.api.INTERP_IDLE):
+                raise RuntimeError("Run conditions changed while loading")
+            self.program_running = True
+            self.program_seen_busy = False
+            self.program_started = time.monotonic()
+            self.cmd.auto(self.api.AUTO_RUN, 0)
+        except Exception:
+            self.cmd.abort()
+            self.program_running = False
+            self.cmd.mode(self.api.MODE_MANUAL)
+            raise
 
     def home_all(self):
         if not self.require_ready()["stationary"]:

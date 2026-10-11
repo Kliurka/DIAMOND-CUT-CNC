@@ -19,6 +19,7 @@ class DiamondCutGraphics(GCodeGraphics):
         self.show_extents_option = False
         self.show_overlay = False
         self.show_live_plot = False
+        self.simulated_work_position = None
         self.use_gradient_background = False
         self.setBackgroundColor(QColor(24, 27, 32))
 
@@ -39,9 +40,20 @@ class DiamondCutGraphics(GCodeGraphics):
         self.reset_default_view()
 
     def tool_tip(self):
+        if self.simulated_work_position is not None:
+            x, z = self.simulated_work_position
+            units = (self.stat.linear_units or 1) * 25.4
+            angle = radians(self.stat.rotation_xy)
+            origin = self.work_origin()
+            return (origin[0] + cos(angle) * x / units,
+                    origin[1] + sin(angle) * x / units, origin[2] + z / units)
         return tuple(a - b for a, b in zip(
             self.to_internal_units(self.stat.actual_position)[:3],
             self.to_internal_units(self.stat.tool_offset)[:3]))
+
+    def set_simulated_work_position(self, position):
+        self.simulated_work_position = position
+        self.updateGL()
 
     def get_current_tool(self):
         # Always use a tip-position cone, even when a tool-table entry is loaded.
@@ -110,7 +122,8 @@ class DiamondCutGraphics(GCodeGraphics):
         angle = radians(self.stat.rotation_xy)
         work_x = (cos(angle) * dx + sin(angle) * dy) * units
         self.preview_status.emit(
-            f"Tool Work: X {work_x:+.3f}   Z {dz * units:+.3f} mm\n"
+            f"{'SIMULATION' if self.simulated_work_position is not None else 'Tool Work'}: "
+            f"X {work_x:+.3f}   Z {dz * units:+.3f} mm\n"
             "Work 0: X 0.000   Z 0.000  |  Cyan origin / Yellow tool")
 
     def draw_screen_markers(self, origin, tip):

@@ -1,6 +1,7 @@
 """Desktop-only PyQt5 mock machine and scan/turn workflow."""
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QTimer
@@ -14,6 +15,7 @@ from PyQt5.QtWidgets import (
 )
 
 from profile import PassSpec, generate_gcode, load_csv, save_csv, simulated_scan_range, smooth
+from gcode_playback import Playback, parse_program
 
 
 class Plot(QWidget):
@@ -91,6 +93,10 @@ class Window(QMainWindow):
         self.control_error = ""
         self.table_key = None
         self.native_preview_factory = native_preview_factory
+        self.playback = None
+        self.playback_timer = QTimer(self)
+        self.playback_timer.setInterval(30)
+        self.playback_timer.timeout.connect(self.playback_tick)
         self.setWindowTitle("Diamond Cut CNC — Simulation")
         self.resize(1280, 790)
         self.raw, self.filtered = [], []
@@ -114,7 +120,7 @@ class Window(QMainWindow):
             self.setWindowTitle("Diamond Cut CNC — LinuxCNC control")
             self.continuous.setChecked(True)
             self.continuous.toggled.connect(lambda: self.control_action(self.backend.stop_jog))
-            self.statusBar().showMessage("Real LinuxCNC manual axes — laser scan is synthetic; G-code is preview only")
+            self.statusBar().showMessage("LinuxCNC control — Run executes real motion; laser scan is synthetic")
             self.machine_timer = QTimer(self)
             self.machine_timer.setInterval(100)
             self.machine_timer.timeout.connect(self.refresh_machine)
@@ -158,7 +164,7 @@ class Window(QMainWindow):
             power_row.addWidget(self.power_button)
             stop = QPushButton("STOP")
             stop.setStyleSheet("background: #b00020; color: white; font-weight: bold")
-            stop.clicked.connect(lambda: self.control_action(self.backend.stop))
+            stop.clicked.connect(self.stop_execution)
             power_row.addWidget(stop)
             root.addLayout(power_row)
         self.estop_label = QLabel()
@@ -316,6 +322,22 @@ class Window(QMainWindow):
         for label, callback in (("Generate preview", self.generate), ("Save G-code", self.save_gcode)):
             button = QPushButton(label); button.clicked.connect(callback); actions.addWidget(button)
         turn_layout.addLayout(actions)
+        execution = QHBoxLayout()
+        self.simulate_button = QPushButton("Simulate G-code")
+        self.simulate_button.clicked.connect(self.simulate_gcode)
+        self.simulation_stop_button = QPushButton("Stop simulation")
+        self.simulation_stop_button.clicked.connect(self.stop_simulation)
+        self.run_button = QPushButton("Run G-code")
+        self.run_button.clicked.connect(self.run_gcode)
+        self.run_button.setEnabled(self.backend is not None)
+        self.simulation_speed = number(10, .1, 100, 1, " ×")
+        for widget in (self.simulate_button, self.simulation_stop_button, self.run_button,
+                       QLabel("Simulation speed"), self.simulation_speed):
+            execution.addWidget(widget)
+        turn_layout.addLayout(execution)
+        self.execution_status = QLabel("Simulation moves the graphic only. Run executes all passes and spindle commands.")
+        self.execution_status.setWordWrap(True)
+        turn_layout.addWidget(self.execution_status)
         preview = QSplitter(Qt.Horizontal)
         self.code = QTextEdit(); self.code.setReadOnly(True); self.code.setPlaceholderText("Generated preview G-code appears here")
         preview.addWidget(self.code)
@@ -396,6 +418,8 @@ class Window(QMainWindow):
         self.update_dros()
 
     def jog_pressed(self, axis, sign):
+        if self.playback is not None:
+            return
         if self.backend is not None:
             selected = self.step_group.checkedButton()
             distance = None if self.continuous.isChecked() else selected.property("step")
@@ -422,6 +446,8 @@ class Window(QMainWindow):
         self.jog_axis = None
 
     def table_pressed(self, sign):
+        if self.playback is not None:
+            return
         if self.backend is not None:
             self.control_action(lambda: self.backend.jog("Y", sign, self.jog_speed.value()))
         elif not self.estop:
@@ -500,6 +526,14 @@ class Window(QMainWindow):
             self.estop_label.setText(label)
             self.power_button.setText("Machine OFF" if state["on"] else "Machine ON")
             ready = state["ready"]
+            if state["running"]:
+                self.execution_status.setText(f"RUNNING — G-code line {state['current_line']}")
+            elif getattr(self, "was_running", False):
+                self.execution_status.setText("Program stopped / completed")
+            self.was_running = state["running"]
+            self.run_button.setEnabled(ready and state["homed"] and state["stationary"] and self.playback is None)
+            self.simulate_button.setEnabled(not state["running"] and self.playback is None)
+            ready = ready and self.playback is None
             for button in self.zero_buttons:
                 button.setEnabled(ready and state["stationary"])
                 button.setToolTip("Set current position to zero in the active work coordinate system"
@@ -508,6 +542,8 @@ class Window(QMainWindow):
         except Exception as exc:
             self.live_state = None
             ready = False
+            self.run_button.setEnabled(False)
+            self.simulate_button.setEnabled(False)
             self.estop_label.setText(f"LinuxCNC unavailable: {exc}")
             for machine, work in self.dros.values():
                 machine.setText("UNKNOWN")
@@ -529,6 +565,7 @@ class Window(QMainWindow):
             self.control_action(self.backend.stop_jog)
 
     def shutdown(self):
+        self.stop_simulation()
         if self.backend is not None:
             self.machine_timer.stop()
             self.backend.stop()
@@ -579,7 +616,10 @@ class Window(QMainWindow):
             QMessageBox.warning(self, "Profile", str(exc))
 
     def generate(self):
+        if self.backend is not None and self.backend.program_running:
+            return False
         try:
+            self.stop_simulation()
             if not self.loaded_profile:
                 raise ValueError("Load a saved smoothed CSV from the Scan tab first")
             settings = self.read_pass_rows()
@@ -594,8 +634,80 @@ class Window(QMainWindow):
                 pass_specs=settings)
             self.code.setPlainText(result)
             self.update_native_preview(result)
+            return True
         except ValueError as exc:
             QMessageBox.warning(self, "Toolpath", str(exc))
+            return False
+
+    def simulate_gcode(self):
+        if self.native_widget is None:
+            QMessageBox.warning(self, "Simulation", "Simulation requires the LinuxCNC QtVCP graph")
+            return
+        if self.backend is not None:
+            state = self.backend.snapshot()
+            if state["running"] or not state["stationary"] or self.backend.active_jog is not None:
+                QMessageBox.warning(self, "Simulation", "Stop axis motion before simulation")
+                return
+            start = (state["work"]["X"], state["work"]["Z"])
+        else:
+            start = tuple(self.machine[a] - self.offset[a] for a in ("X", "Z"))
+        if not self.generate():
+            return
+        try:
+            moves = parse_program(self.code.toPlainText(), start=start)
+            self.playback = Playback(moves, start)
+            self.playback_time = time.monotonic()
+            self.native_widget.set_simulated_work_position(start)
+            self.playback_timer.start()
+            self.run_button.setEnabled(False)
+            self.simulate_button.setEnabled(False)
+            self.execution_status.setText("SIMULATION — graphic only, no machine commands")
+        except Exception as exc:
+            self.stop_simulation()
+            QMessageBox.warning(self, "Simulation", str(exc))
+
+    def playback_tick(self):
+        if self.playback is None:
+            return
+        now = time.monotonic()
+        position = self.playback.advance((now - self.playback_time) * self.simulation_speed.value())
+        self.playback_time = now
+        self.native_widget.set_simulated_work_position(position)
+        if self.playback.done:
+            self.stop_simulation()
+            self.execution_status.setText("Simulation completed — marker shows actual tool again")
+
+    def stop_execution(self):
+        self.stop_simulation()
+        if self.backend is not None:
+            self.control_action(self.backend.stop)
+
+    def stop_simulation(self):
+        self.playback_timer.stop()
+        self.playback = None
+        if getattr(self, "native_widget", None) is not None:
+            self.native_widget.set_simulated_work_position(None)
+        if hasattr(self, "simulate_button"):
+            self.simulate_button.setEnabled(True)
+
+    def run_gcode(self):
+        if self.backend is None:
+            return
+        if self.playback is not None:
+            QMessageBox.warning(self, "Run", "Stop simulation first")
+            return
+        if not self.generate():
+            return
+        try:
+            folder = Path(tempfile.mkdtemp(prefix="diamondcut-run-"))
+            path = folder / "program.ngc"
+            path.write_text(self.code.toPlainText(), encoding="utf-8")
+            self.backend.run_program(path)
+            self.execution_status.setText("RUNNING — all enabled passes")
+        except Exception as exc:
+            self.execution_status.setText(f"Run blocked: {exc}")
+            QMessageBox.warning(self, "Run", str(exc))
+        self.refresh_machine()
 
     def save_raw(self):
         if not self.raw: return
@@ -667,7 +779,7 @@ class Window(QMainWindow):
             position_label = QLabel("Tool Work: waiting for LinuxCNC position")
             self.native_widget.preview_status.connect(position_label.setText)
             self.native_layout.addWidget(position_label)
-            legend = QLabel("X home: left / +X: right   |   Z home: top / +Z: down\nCyan: Work 0   |   Yellow cone: actual tool tip")
+            legend = QLabel("X home: left / +X: right   |   Z home: top / +Z: down\nCyan: Work 0   |   Yellow cone: tool tip / simulation position")
             legend.setWordWrap(True)
             self.native_layout.addWidget(legend)
             reset_view = QPushButton("Reset X/Z view")
