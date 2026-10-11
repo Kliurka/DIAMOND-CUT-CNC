@@ -143,7 +143,10 @@ def generate_gcode(
         xs = [rim_radius - s.edge_mm + tool_x_offset - sensor_x_offset for s in samples]
         if any(x < 0 for x in xs) or any(xs[i] <= xs[i+1] for i in range(len(xs)-1)):
             raise ValueError("X values must descend toward, but not beyond, spindle center")
-    zprofile = [s.z_mm + tool_z_offset - sensor_z_offset for s in samples]
+    # Work Z0 is touched off at the first profile point. Sensor readings carry
+    # an arbitrary absolute baseline; retain their differences, not that bias.
+    z_reference = samples[0].z_mm if rim_radius is None else 0.0
+    zprofile = [s.z_mm - z_reference + tool_z_offset - sensor_z_offset for s in samples]
     # Current machine: -Z is up/clearance, +Z is down/into the face.
     z_sign = 1 if rim_radius is None else -1
     clearance = min(zprofile) - safe_z if z_sign == 1 else max(zprofile) + safe_z

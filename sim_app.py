@@ -298,7 +298,7 @@ class Window(QMainWindow):
             fields.addWidget(QLabel(label), index // 4, (index % 4) * 2)
             fields.addWidget(widget, index // 4, (index % 4) * 2 + 1)
         turn_layout.addLayout(fields)
-        turn_layout.addWidget(QLabel("Passes: target depth is measured from the scanned surface. Double-click cells to edit."))
+        turn_layout.addWidget(QLabel("First scan point = Work Z0. Pass depth follows the relative profile (+Z). Double-click cells to edit."))
         self.pass_table = QTableWidget(0, 5)
         self.pass_table.setHorizontalHeaderLabels(["Use", "Target depth mm", "Feed", "RPM", "Surface m/min"])
         self.pass_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)

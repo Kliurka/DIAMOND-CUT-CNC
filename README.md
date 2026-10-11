@@ -124,7 +124,10 @@ Y is not drawn as a cutting axis. These are renderer settings only; the
 PNCconf-generated kinematics, homing and motion configuration are unchanged.
 
 For work-X profiles on this machine, -Z retracts up and +Z cuts down.
-Pass depth is added to the scanned surface Z. Each rapid X move occurs at
+The first scan point is anchored at Work Z0; later points retain their Z
+differences from that point. Pass depth is added to this relative surface Z,
+so a 0.01 mm pass starts at Z0.0100 when sensor/tool Z offsets match. Configured
+tool Z minus sensor Z calibration is still applied. Each rapid X move occurs at
 min(surface Z) minus safe clearance, above the entire profile. Regenerate the
 preview after updating; previously saved G-code retains its old Z signs.
 The legacy rim-radius API retains its historical +Z clearance convention.

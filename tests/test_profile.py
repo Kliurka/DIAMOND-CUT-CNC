@@ -11,15 +11,28 @@ class ProfileTests(unittest.TestCase):
         code = generate_gcode(points, passes=2, total_depth=.2, max_depth=.5,
                               feed=30, rpm=500, surface_speed=100,
                               max_rpm=1200, safe_z=5)
-        self.assertEqual(code.count('G0 Z-6.0000'), 4)
-        self.assertIn('G1 Z2.1000', code)
-        self.assertIn('G1 X15.0000 Z-0.8000', code)
-        self.assertIn('G1 X20.0000 Z3.2000', code)
+        self.assertEqual(code.count('G0 Z-8.0000'), 4)
+        self.assertIn('G1 Z0.1000', code)
+        self.assertIn('G1 X15.0000 Z-2.8000', code)
+        self.assertIn('G1 X20.0000 Z1.2000', code)
         # Every rapid X move is preceded by clearance above min(surface Z).
         lines = code.splitlines()
         for index, line in enumerate(lines):
             if line.startswith('G0 X'):
-                self.assertEqual(lines[index-1], 'G0 Z-6.0000')
+                self.assertEqual(lines[index-1], 'G0 Z-8.0000')
+
+    def test_first_pass_starts_at_work_z_depth_without_sensor_baseline(self):
+        points = [Sample(0, 1.0003, 0), Sample(1, 1.0338, 1), Sample(2, .95, 2)]
+        options = dict(passes=1, total_depth=.01, max_depth=.5, feed=50,
+                       rpm=500, surface_speed=100, max_rpm=1200, safe_z=5)
+        code = generate_gcode(points, **options)
+        self.assertIn('G1 Z0.0100', code)
+        self.assertIn('G1 X1.0000 Z0.0435', code)
+        self.assertIn('G1 X2.0000 Z-0.0403', code)
+        shifted = [Sample(p.edge_mm, p.z_mm + 50, p.work_x_mm) for p in points]
+        self.assertEqual(generate_gcode(shifted, **options), code)
+        calibrated = generate_gcode(points, tool_z_offset=.2, sensor_z_offset=.1, **options)
+        self.assertIn('G1 Z0.1100', calibrated)
 
     def test_work_x_survives_smoothing_csv_and_toolpath_offsets(self):
         points = smooth(simulated_scan_range(-12, 22, 2), 3, 3)
