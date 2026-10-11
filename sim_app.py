@@ -196,7 +196,7 @@ class Window(QMainWindow):
         layout.addLayout(steps)
         movement = QGridLayout()
         self.jog_buttons = []
-        for row, col, axis, sign in ((0, 1, "Z", 1), (2, 1, "Z", -1),
+        for row, col, axis, sign in ((0, 1, "Z", -1), (2, 1, "Z", 1),
                                      (1, 0, "X", -1), (1, 2, "X", 1)):
             button = QPushButton(f"{axis}{'+' if sign > 0 else '−'}")
             button.pressed.connect(lambda a=axis, s=sign: self.jog_pressed(a, s))
