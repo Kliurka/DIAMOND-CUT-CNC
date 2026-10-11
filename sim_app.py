@@ -296,7 +296,7 @@ class Window(QMainWindow):
         self.mode.setToolTip("CSS requires X referenced to spindle center. Work-X profiles currently use G97.")
         self.mode.currentIndexChanged.connect(lambda index: self.feed.setValue(0.1 if index else 50))
         for index, (label, widget) in enumerate((
-            ("Passes", self.passes), ("Total depth", self.depth),
+            ("Total depth", self.depth),
             ("Feed (mode dependent)", self.feed), ("Starting RPM", self.rpm),
             ("Max RPM", self.max_rpm), ("Surface speed", self.surface_speed),
             ("Mode", self.mode),
@@ -310,14 +310,12 @@ class Window(QMainWindow):
         self.pass_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.pass_table.setMinimumHeight(160)
         turn_layout.addWidget(self.pass_table)
-        pass_buttons = QHBoxLayout()
-        for label, callback in (("Create pass rows", self.reset_pass_rows),
-                                ("Add pass", self.add_pass), ("Remove selected pass", self.remove_pass)):
-            button = QPushButton(label)
-            button.clicked.connect(lambda _=False, action=callback: action())
-            pass_buttons.addWidget(button)
-        turn_layout.addLayout(pass_buttons)
         self.reset_pass_rows()
+        self.passes.valueChanged.connect(self.reset_pass_rows)
+        self.depth.valueChanged.connect(self.reset_pass_rows)
+        self.feed.valueChanged.connect(lambda: self.update_pass_defaults(2, self.feed.value(), 4))
+        self.rpm.valueChanged.connect(lambda: self.update_pass_defaults(3, self.rpm.value(), 0))
+        self.surface_speed.valueChanged.connect(lambda: self.update_pass_defaults(4, self.surface_speed.value(), 3))
         actions = QHBoxLayout()
         for label, callback in (("Generate preview", self.generate), ("Save G-code", self.save_gcode)):
             button = QPushButton(label); button.clicked.connect(callback); actions.addWidget(button)
@@ -360,6 +358,29 @@ class Window(QMainWindow):
         self.tool_z = number(0, -1000, 1000, 3, " mm")
         self.safe_z = number(5, 0.1, 100, 2, " mm")
         self.max_depth = number(0.5, 0.001, 10, 3, " mm")
+        form.addRow("Passes", self.passes)
+        form.addRow(QLabel("Changing Passes or Total depth rebuilds the pass table. Cells remain editable."))
+        limits_group = QGroupBox("Machine coordinates — travel limits (mm)")
+        limits_grid = QGridLayout(limits_group)
+        for col, text in enumerate(("Axis", "Min", "Max")):
+            limits_grid.addWidget(QLabel(text), 0, col)
+        limits = (self.backend.coordinate_limits() if self.backend is not None
+                  else {"X": (-1.01, 199), "Y": (-.01, 200), "Z": (-1.01, 99.01)})
+        self.coordinate_limit_fields = {}
+        for row, axis in enumerate(("X", "Z", "Y"), 1):
+            limits_grid.addWidget(QLabel(axis + (" (table)" if axis == "Y" else "")), row, 0)
+            boxes = tuple(number(v, -100000, 100000, 3) for v in limits[axis])
+            self.coordinate_limit_fields[axis] = boxes
+            for col, box in enumerate(boxes, 1):
+                limits_grid.addWidget(box, row, col)
+        form.addRow(limits_group)
+        self.save_limits_button = QPushButton("Save machine limits")
+        self.save_limits_button.clicked.connect(self.save_machine_limits)
+        self.save_limits_button.setEnabled(self.backend is not None and self.backend.ini_path is not None)
+        form.addRow(self.save_limits_button)
+        self.limits_status = QLabel("Machine coordinates, independent of Work 0. Machine OFF required; restart LinuxCNC after saving.")
+        self.limits_status.setWordWrap(True)
+        form.addRow(self.limits_status)
         for label, widget in (
             ("Sensor X offset", self.sensor_x),
             ("Sensor Z offset", self.sensor_z), ("Tool X offset", self.tool_x),
@@ -531,7 +552,8 @@ class Window(QMainWindow):
             elif getattr(self, "was_running", False):
                 self.execution_status.setText("Program stopped / completed")
             self.was_running = state["running"]
-            self.run_button.setEnabled(ready and state["homed"] and state["stationary"] and self.playback is None)
+            self.run_button.setEnabled(ready and state["homed"] and state["stationary"] and self.playback is None
+                                       and not self.backend.limits_pending)
             self.simulate_button.setEnabled(not state["running"] and self.playback is None)
             ready = ready and self.playback is None
             for button in self.zero_buttons:
@@ -753,9 +775,23 @@ class Window(QMainWindow):
         for i in range(1, self.passes.value() + 1):
             self.add_pass(i * self.depth.value() / self.passes.value())
 
-    def remove_pass(self):
-        row = self.pass_table.currentRow()
-        if row >= 0: self.pass_table.removeRow(row)
+    def update_pass_defaults(self, column, value, decimals):
+        for row in range(self.pass_table.rowCount()):
+            self.pass_table.item(row, column).setText(f"{value:.{decimals}f}")
+
+    def save_machine_limits(self):
+        if self.backend is None:
+            return
+        try:
+            if self.playback is not None:
+                raise RuntimeError("Stop simulation before saving limits")
+            limits = {axis: tuple(box.value() for box in boxes)
+                      for axis, boxes in self.coordinate_limit_fields.items()}
+            self.backend.save_coordinate_limits(limits)
+            self.limits_status.setText("Saved — restart LinuxCNC to activate the new limits. Run is blocked until restart.")
+            self.refresh_machine()
+        except (RuntimeError, ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Machine limits", str(exc))
 
     def read_pass_rows(self):
         rows = []

@@ -140,8 +140,10 @@ rewritten by touch-off. A rejected/failed zero command does not trigger reload.
 
 ### G-code simulation and execution
 
-In **Toolpath & Turning**, load the smoothed CSV and configure the enabled pass
-rows. **Simulate G-code** regenerates the program and animates the yellow tool
+Set the **Passes** count in **Settings**. In **Toolpath & Turning**, load the
+smoothed CSV and configure the enabled pass rows. Changing Passes or Total depth
+rebuilds the table automatically; changing the default feed/RPM/surface speed
+updates that column. Individual cells remain editable. **Simulate G-code** regenerates the program and animates the yellow tool
 marker from the current Work X/Z position. It sends no motion or spindle commands.
 The speed multiplier affects only this graphical playback; rapid moves use an
 approximate 600 mm/min, feed moves use their programmed F values. Acceleration
@@ -164,3 +166,19 @@ spindle off. Completion returns to Manual mode. Native LinuxCNC remains responsi
 for trajectory execution, limits and spindle control; the screen sends NML
 commands and never writes stepgen pins. Hardware execution still needs acceptance
 testing on the machine.
+
+### Machine coordinate limits in Settings
+
+Settings shows X/Z and the manual Y table Min/Max travel in machine mm, independent
+of Work 0. Values initially come from the active INI. Turn Machine OFF, edit the
+limits and click **Save machine limits**, then restart LinuxCNC. Saving updates
+both AXIS and corresponding XYZ JOINT sections in the active launch INI and keeps
+a `.ini.limits-backup`. It sends no runtime limit commands; Run is blocked until
+restart so it cannot use limits that have not yet become active.
+
+The configuration directory also stores `diamondcut-limits.json`. After PNCconf
+regeneration, rerun `setup_machine_qtvcp.py`; it reapplies these saved limits to
+`diamondcut-control.ini` while preserving the original PNCconf INI. These screen
+overrides take precedence over PNCconf travel limits for the Diamond Cut launch
+configuration. Set travel values for the real mechanics; increasing a limit does
+not increase physical travel. Y remains manual.

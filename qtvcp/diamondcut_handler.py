@@ -27,7 +27,8 @@ class HandlerClass:
         backend = None
         if real:
             from linuxcnc_control import LinuxCNCControl
-            backend = LinuxCNCControl(linuxcnc, ini, lambda: read_snapshot(hal.get_value)["healthy"])
+            backend = LinuxCNCControl(linuxcnc, ini, lambda: read_snapshot(hal.get_value)["healthy"],
+                                      ini_path=os.environ["INI_FILE_NAME"])
             self.hal.newpin("table-lock", hal.HAL_BIT, hal.HAL_IN)
             self.hal["table-lock"] = False
         self.panel = Window(native_preview_factory=self.make_graphics, machine_backend=backend)

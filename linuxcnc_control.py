@@ -4,14 +4,17 @@ from pathlib import Path
 import time
 
 from gcode_playback import parse_program
+from machine_settings import save_limits, validate_limits
 
 AXES = "XYZ"
 
 
 class LinuxCNCControl:
-    def __init__(self, api, ini, healthy=lambda: True):
+    def __init__(self, api, ini, healthy=lambda: True, ini_path=None):
         self.api = api
         self.ini = ini
+        self.ini_path = Path(ini_path).resolve() if ini_path else None
+        self.limits_pending = False
         self.stat = api.stat()
         self.cmd = api.command()
         self.healthy = healthy
@@ -155,7 +158,24 @@ class LinuxCNCControl:
                         self.cmd.wait_complete(1)
                         self.cmd.mode(self.api.MODE_MANUAL)
 
+    def coordinate_limits(self):
+        return validate_limits({axis: (self.ini.find('AXIS_' + axis, 'MIN_LIMIT'),
+                                      self.ini.find('AXIS_' + axis, 'MAX_LIMIT'))
+                                for axis in AXES})
+
+    def save_coordinate_limits(self, limits):
+        state = self.snapshot()
+        if (state['on'] or not state['stationary'] or state['homing']
+                or self.program_running or self.output_test_active or self.active_jog is not None):
+            raise RuntimeError('Turn Machine OFF and stop motion before saving limits')
+        if self.ini_path is None:
+            raise RuntimeError('Machine INI path is unavailable')
+        save_limits(self.ini_path, limits)
+        self.limits_pending = True
+
     def run_program(self, path):
+        if self.limits_pending:
+            raise RuntimeError('Restart LinuxCNC to activate the saved machine limits')
         state = self.require_ready(homed=True)
         if not state["stationary"] or self.active_jog is not None:
             raise RuntimeError("Stop motion before Run")

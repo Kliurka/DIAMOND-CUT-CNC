@@ -40,6 +40,22 @@ class ExecutionUITests(unittest.TestCase):
         self.addCleanup(self.window.close)
         self.addCleanup(self.window.shutdown)
 
+    def test_pass_count_in_settings_rebuilds_rows_without_control_buttons(self):
+        tabs = self.window.centralWidget().widget(1)
+        self.assertTrue(tabs.widget(2).isAncestorOf(self.window.passes))
+        from PyQt5.QtWidgets import QPushButton
+        texts = [button.text() for button in self.window.findChildren(QPushButton)]
+        for text in ('Create pass rows', 'Add pass', 'Remove selected pass'):
+            self.assertNotIn(text, texts)
+        self.window.passes.setValue(2)
+        self.window.depth.setValue(.02)
+        self.assertEqual(self.window.pass_table.rowCount(), 2)
+        self.assertEqual([p.depth_mm for p in self.window.read_pass_rows()], [.01, .02])
+        self.window.feed.setValue(77)
+        self.assertEqual([p.feed for p in self.window.read_pass_rows()], [77, 77])
+        self.window.pass_table.item(0, 1).setText('0.005')
+        self.assertEqual(self.window.read_pass_rows()[0].depth_mm, .005)
+
     def test_simulate_is_graph_only_and_blocks_table_keyboard_jog(self):
         self.window.simulate_button.click()
         self.assertIsNotNone(self.window.playback)

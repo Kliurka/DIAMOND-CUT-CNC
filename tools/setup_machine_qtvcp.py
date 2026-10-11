@@ -93,6 +93,14 @@ def setup(source, repo_root):
         "JOINT_0": {"HOME_SEQUENCE": "2"},
         "JOINT_2": {"HOME_SEQUENCE": "1"},
     })
+    # Screen limits survive PNCconf regeneration; original PNCconf INI stays intact.
+    import sys
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from machine_settings import read_saved_limits, limit_sections
+    saved_limits = read_saved_limits(source.parent)
+    if saved_limits is not None:
+        updated = change_sections(updated, limit_sections(saved_limits))
     # Y is a manual table with no home reference. LinuxCNC's global homing gate
     # must allow MDI with unhomed Y; the screen still requires X/Z homing.
     section = ""
