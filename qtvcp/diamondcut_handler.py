@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 
 from PyQt5.QtCore import Qt
-from qtvcp.widgets.gcode_graphics import GCodeGraphics
 
 
 class HandlerClass:
@@ -46,11 +45,13 @@ class HandlerClass:
             self.panel.statusBar().showMessage("Axis controls and laser scan simulated — real bench controls in Mesa I/O")
 
     def make_graphics(self, parent):
-        widget = GCodeGraphics(parent)
+        from diamondcut_graphics import DiamondCutGraphics
+        widget = DiamondCutGraphics(parent)
         widget.setObjectName("diamondcut_gcode")
         # QtVCP injects its screen context into HAL widgets before initialized__.
         # Register this dynamically created graphics widget through the supported path.
         widget.hal_init(HAL_NAME="diamondcut_gcode")
+        widget.current_view = "y"
         return widget
 
     def closing_cleanup__(self):

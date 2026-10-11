@@ -659,6 +659,12 @@ class Window(QMainWindow):
             self.native_layout.removeWidget(self.native_label)
             self.native_label.hide()
             self.native_layout.addWidget(self.native_widget)
+            legend = QLabel("X home: left / +X: right   |   Z home: top / +Z: down   |   Cyan: Work 0")
+            legend.setWordWrap(True)
+            self.native_layout.addWidget(legend)
+            reset_view = QPushButton("Reset X/Z view")
+            reset_view.clicked.connect(self.native_widget.reset_default_view)
+            self.native_layout.addWidget(reset_view)
         except Exception as exc:
             self.native_label.setText(f"Native LinuxCNC preview unavailable: {exc}")
 

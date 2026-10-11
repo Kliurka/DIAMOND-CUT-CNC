@@ -106,3 +106,14 @@ In real-control Mesa I/O, Unlock output test asks for a password. The first use 
 Unlock requires healthy Mesa, machine ON, stopped axes and idle Manual mode. While unlocked, axis jog, homing and touch-off are blocked. OUT0–OUT5 can be switched and the spindle can be started forward at the selected RPM using the LinuxCNC spindle command and current PNCconf wiring. HAL-linked outputs are not force-overridden: HAL reports a write failure if another component owns the pin. The provided configuration has all six physical outputs unassigned.
 
 Spindle OFF and All outputs OFF require no password. Closing/hiding the Mesa tab, application deactivation, STOP, machine OFF/E-stop, a communication fault or shutdown locks the session and attempts all six OFF commands plus spindle OFF. An OFF failure is displayed and keeps axis controls inhibited until a successful All outputs OFF clears it. Hardware feedback is not inferred from a command. Test mode never writes LinuxCNC-owned stepgen pins.
+
+### QtVCP X/Z preview orientation
+
+The native preview starts in an orthographic X/Z view: X home at the left,
+Z home at the top, positive X right and positive Z down. The tip-position
+cone stays aligned with Z, including when a tool-table entry is loaded.
+The cyan `Work 0` cross/circle follows the active G5x and G92 offsets, including
+when both offsets are zero. Reset X/Z view fits the program, machine origin
+and work origin and restores this orientation after panning or rotation.
+Y is not drawn as a cutting axis. These are renderer settings only; the
+PNCconf-generated kinematics, homing and motion configuration are unchanged.
