@@ -9,6 +9,7 @@ from qtvcp.widgets.gcode_graphics import GCodeGraphics
 
 class DiamondCutGraphics(GCodeGraphics):
     preview_status = pyqtSignal(str)
+    program_line_selected = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -23,6 +24,25 @@ class DiamondCutGraphics(GCodeGraphics):
         self.use_gradient_background = False
         self.setBackgroundColor(QColor(24, 27, 32))
 
+
+    def update_highlight_variable(self, line):
+        # Native picking calls this hook; external highlights must not echo back.
+        external = getattr(self, '_block_line_selected', False)
+        super().update_highlight_variable(line)
+        if not external and not getattr(self, '_programmatic_highlight', False) and line is not None and line > 0:
+            self.program_line_selected.emit(int(line))
+
+    def highlight_program_line(self, line):
+        self._programmatic_highlight = True
+        try:
+            self.makeCurrent()
+            self.highlight_graphics(line if line > 0 else None)
+            self.updateGL()
+        finally:
+            self._programmatic_highlight = False
+            # Native set_highlight_line returns early for an unchanged line.
+            self._block_line_selected = False
+            self.doneCurrent()
 
     def get_show_tool(self):
         # Draw our opaque marker last, rather than the translucent stock cone.

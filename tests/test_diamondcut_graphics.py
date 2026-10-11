@@ -22,6 +22,9 @@ class GraphicsTests(unittest.TestCase):
     def setUp(self):
         self.gl = MagicMock()
         class GraphicsBase(QWidget):
+            def update_highlight_variable(self, line):
+                self.highlight_line = line
+                self._block_line_selected = False
             def setBackgroundColor(self, color):
                 self.background = color
             def paintGL(self):
@@ -49,6 +52,26 @@ class GraphicsTests(unittest.TestCase):
 
     def tearDown(self):
         self.widget.close()
+
+    def test_native_pick_emits_local_line_signal_but_external_update_does_not(self):
+        lines = []
+        self.widget.program_line_selected.connect(lines.append)
+        self.widget.update_highlight_variable(12)
+        self.assertEqual(lines, [12])
+        self.widget._block_line_selected = True
+        self.widget.update_highlight_variable(15)
+        self.assertEqual(lines, [12])
+        self.widget.highlight_graphics = lambda line: self.widget.update_highlight_variable(line)
+        self.widget.makeCurrent = MagicMock()
+        self.widget.doneCurrent = MagicMock()
+        self.widget.updateGL = MagicMock()
+        self.widget.highlight_program_line(20)
+        self.assertEqual(self.widget.highlight_line, 20)
+        self.assertEqual(lines, [12])
+        self.widget.makeCurrent.assert_called_once()
+        self.widget.doneCurrent.assert_called_once()
+        self.widget.update_highlight_variable(21)
+        self.assertEqual(lines, [12, 21])
 
     def test_simulation_marker_tracks_work_offsets_without_changing_status(self):
         self.widget.updateGL = MagicMock()

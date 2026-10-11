@@ -13,6 +13,10 @@ from test_linuxcnc_control import make_backend
 
 class Preview(QWidget):
     preview_status = pyqtSignal(str)
+    program_line_selected = pyqtSignal(int)
+
+    def highlight_program_line(self, line):
+        self.highlighted_line = line
 
     def set_simulated_work_position(self, position):
         self.position = position
@@ -39,6 +43,44 @@ class ExecutionUITests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         self.addCleanup(self.window.close)
         self.addCleanup(self.window.shutdown)
+
+    def test_graphic_selection_scrolls_text_without_commands(self):
+        self.window.code.setPlainText('\n'.join(f'G1 X{i} Z0' for i in range(300)))
+        self.window.centralWidget().widget(1).setCurrentIndex(1)
+        self.window.show()
+        self.app.processEvents()
+        self.window.native_widget.program_line_selected.emit(250)
+        self.assertEqual(self.window.code.textCursor().blockNumber(), 249)
+        self.assertEqual(self.window.selected_code_line, (250, False))
+        self.assertGreater(self.window.code.verticalScrollBar().value(), 0)
+        self.assertEqual(len(self.window.code.extraSelections()), 1)
+        self.assertEqual(self.commands.calls, [])
+        self.window.native_widget.program_line_selected.emit(-1)
+        self.assertEqual(self.window.selected_code_line, (250, False))
+
+    def test_text_selection_highlights_matching_segment(self):
+        self.window.generate()
+        from PyQt5.QtGui import QTextCursor
+        self.window.code.setTextCursor(QTextCursor(self.window.code.document().findBlockByNumber(10)))
+        self.assertEqual(self.window.native_widget.highlighted_line, 11)
+        self.assertEqual(self.window.selected_code_line, (11, False))
+        self.assertEqual(self.commands.calls, [])
+
+    def test_run_follows_motion_line_and_clears_executing_state_when_stopped(self):
+        self.window.run_gcode()
+        self.status.interp_state = 2
+        self.status.motion_line = 12
+        self.window.refresh_machine()
+        self.assertEqual(self.window.selected_code_line, (12, True))
+        self.assertEqual(self.window.code.textCursor().blockNumber(), 11)
+        self.assertEqual(self.window.native_widget.highlighted_line, 12)
+        self.window.native_widget.program_line_selected.emit(8)
+        self.assertEqual(self.window.selected_code_line, (12, True))
+        self.status.motion_line = 13
+        self.window.refresh_machine()
+        self.assertEqual(self.window.selected_code_line, (13, True))
+        self.window.stop_execution()
+        self.assertEqual(self.window.selected_code_line, (13, False))
 
     def test_pass_count_in_settings_rebuilds_rows_without_control_buttons(self):
         tabs = self.window.centralWidget().widget(1)

@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtGui import QColor, QPainter, QPen, QTextCursor, QTextFormat
 from PyQt5.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
@@ -338,7 +338,16 @@ class Window(QMainWindow):
         turn_layout.addWidget(self.execution_status)
         preview = QSplitter(Qt.Horizontal)
         self.code = QTextEdit(); self.code.setReadOnly(True); self.code.setPlaceholderText("Generated preview G-code appears here")
-        preview.addWidget(self.code)
+        self.syncing_code_line = False
+        self.selected_code_line = None
+        self.code.cursorPositionChanged.connect(self.code_cursor_changed)
+        code_host = QWidget()
+        code_layout = QVBoxLayout(code_host)
+        code_layout.setContentsMargins(0, 0, 0, 0)
+        self.code_line_label = QLabel("Select a code line or a path segment")
+        code_layout.addWidget(self.code_line_label)
+        code_layout.addWidget(self.code)
+        preview.addWidget(code_host)
         self.native_host = QWidget()
         self.native_layout = QVBoxLayout(self.native_host)
         self.native_label = QLabel("LinuxCNC native GCodeGraphics is available in a running LinuxCNC/QtVCP context.\nNo substitute 3D plot is shown.")
@@ -549,8 +558,11 @@ class Window(QMainWindow):
             ready = state["ready"]
             if state["running"]:
                 self.execution_status.setText(f"RUNNING — G-code line {state['current_line']}")
+                self.show_program_line(state['current_line'], executing=True)
             elif getattr(self, "was_running", False):
                 self.execution_status.setText("Program stopped / completed")
+                if self.selected_code_line is not None:
+                    self.show_program_line(self.selected_code_line[0])
             self.was_running = state["running"]
             self.run_button.setEnabled(ready and state["homed"] and state["stationary"] and self.playback is None
                                        and not self.backend.limits_pending)
@@ -654,7 +666,14 @@ class Window(QMainWindow):
                 sensor_z_offset=self.sensor_z.value(), tool_x_offset=self.tool_x.value(),
                 tool_z_offset=self.tool_z.value(), use_css=self.mode.currentIndex() == 1,
                 pass_specs=settings)
-            self.code.setPlainText(result)
+            self.syncing_code_line = True
+            try:
+                self.code.setPlainText(result)
+                self.code.setExtraSelections([])
+                self.selected_code_line = None
+                self.code_line_label.setText("Select a code line or a path segment")
+            finally:
+                self.syncing_code_line = False
             self.update_native_preview(result)
             return True
         except ValueError as exc:
@@ -804,6 +823,47 @@ class Window(QMainWindow):
                 raise ValueError(f"Invalid value in pass row {row+1}")
         return rows
 
+    def graphics_line_selected(self, line):
+        if self.backend is not None and self.backend.program_running:
+            return
+        self.show_program_line(line, highlight_graphics=False)
+
+    def code_cursor_changed(self):
+        if self.syncing_code_line or not self.code.toPlainText():
+            return
+        if self.backend is not None and self.backend.program_running:
+            return
+        self.show_program_line(self.code.textCursor().blockNumber() + 1)
+
+    def show_program_line(self, line, executing=False, highlight_graphics=True):
+        # LinuxCNC/canon line numbers are one-based; QTextDocument blocks are zero-based.
+        if line <= 0:
+            return
+        block = self.code.document().findBlockByNumber(line - 1)
+        if not block.isValid() or not block.text():
+            return
+        selection_key = (line, executing)
+        if (self.selected_code_line == selection_key
+                and self.code.textCursor().blockNumber() == line - 1):
+            return
+        self.syncing_code_line = True
+        try:
+            cursor = QTextCursor(block)
+            self.code.setTextCursor(cursor)
+            selection = QTextEdit.ExtraSelection()
+            selection.cursor = cursor
+            selection.format.setBackground(QColor("#a6edaa" if executing else "#ffe083"))
+            selection.format.setForeground(QColor("#171717"))
+            selection.format.setProperty(QTextFormat.FullWidthSelection, True)
+            self.code.setExtraSelections([selection])
+            self.code.ensureCursorVisible()
+            self.code_line_label.setText(f"{'Executing' if executing else 'Selected'} G-code line {line}")
+            self.selected_code_line = selection_key
+            if highlight_graphics and self.native_widget is not None:
+                self.native_widget.highlight_program_line(line)
+        finally:
+            self.syncing_code_line = False
+
     def init_native_preview(self):
         if self.native_preview_factory is None:
             return
@@ -814,6 +874,7 @@ class Window(QMainWindow):
             self.native_layout.addWidget(self.native_widget)
             position_label = QLabel("Tool Work: waiting for LinuxCNC position")
             self.native_widget.preview_status.connect(position_label.setText)
+            self.native_widget.program_line_selected.connect(self.graphics_line_selected)
             self.native_layout.addWidget(position_label)
             legend = QLabel("X home: left / +X: right   |   Z home: top / +Z: down\nCyan: Work 0   |   Yellow cone: tool tip / simulation position")
             legend.setWordWrap(True)

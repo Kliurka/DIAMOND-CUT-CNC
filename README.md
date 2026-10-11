@@ -182,3 +182,15 @@ regeneration, rerun `setup_machine_qtvcp.py`; it reapplies these saved limits to
 overrides take precedence over PNCconf travel limits for the Diamond Cut launch
 configuration. Set travel values for the real mechanics; increasing a limit does
 not increase physical travel. Y remains manual.
+
+### Linked G-code selection and execution line
+
+Click a trajectory segment in the native QtVCP graph to scroll the text to its
+one-based G-code line and highlight it in yellow. Selecting a text line also
+highlights the corresponding graph segment; comments and non-motion lines have
+no trajectory segment. A label above the text shows the selected line number.
+During **Run G-code**, the screen follows LinuxCNC `motion_line`, highlights the
+executing text line in green and scrolls it into view. It updates only when the
+line changes. After STOP/completion the last line remains selected in yellow.
+Line selection is a display action; Run continues to start the entire program
+from line 0.
