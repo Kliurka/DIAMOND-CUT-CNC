@@ -28,6 +28,8 @@ class LinuxCNCControl:
             raise ValueError("Each axis needs a positive MAX_VELOCITY")
         self.active_jog = None
         self.table_locked = False
+        self.output_test_active = False
+        self.output_test_stop = None
 
     def snapshot(self):
         self.stat.poll()
@@ -37,6 +39,8 @@ class LinuxCNCControl:
         homing = any(j.get("homing", False) for j in s.joint[:3])
         ready = (healthy and on and s.task_mode == api.MODE_MANUAL
                  and s.interp_state == api.INTERP_IDLE and not homing)
+        test_ready = ready
+        ready = ready and not self.output_test_active
         if self.active_jog is not None and not ready:
             self.stop_jog()
         machine = dict(zip(AXES, s.actual_position[:3]))
@@ -52,7 +56,8 @@ class LinuxCNCControl:
         return {"machine": machine, "work": work, "ready": ready, "healthy": healthy,
                 "on": on, "estop": s.task_state == api.STATE_ESTOP,
                 "homed": bool(s.homed[0] and s.homed[2]), "homing": homing, "stationary": bool(s.inpos),
-                "can_touch_off": bool(s.homed[0] and s.homed[2]), "table_locked": self.table_locked}
+                "can_touch_off": bool(s.homed[0] and s.homed[2]), "table_locked": self.table_locked,
+                "test_ready": test_ready}
 
     def require_ready(self, homed=False):
         state = self.snapshot()
@@ -121,7 +126,11 @@ class LinuxCNCControl:
         try:
             self.stop_jog()
         finally:
-            self.cmd.abort()
+            try:
+                if self.output_test_stop is not None:
+                    self.output_test_stop()
+            finally:
+                self.cmd.abort()
 
     def home_all(self):
         if not self.require_ready()["stationary"]:

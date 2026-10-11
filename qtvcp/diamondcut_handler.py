@@ -39,7 +39,7 @@ class HandlerClass:
             self.panel.machine_timer.timeout.connect(
                 lambda: self.panel.backend.set_table_locked(self.hal["table-lock"]))
         self.mesa_panel = MesaIOPanel(hal.get_value, self.panel,
-                                     writer=None if real else hal.set_p, allow_bench=not real)
+                                     writer=hal.set_p, allow_bench=not real, backend=backend)
         tabs = self.panel.centralWidget().widget(1)
         tabs.addTab(self.mesa_panel, "4. Mesa I/O")
         if not real:

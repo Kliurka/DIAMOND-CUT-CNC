@@ -2,7 +2,8 @@
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QTableWidget,
                             QTableWidgetItem, QCheckBox, QPushButton,
-                            QGroupBox, QHBoxLayout, QSpinBox, QApplication)
+                            QGroupBox, QHBoxLayout, QSpinBox, QApplication,
+                            QInputDialog, QLineEdit, QMessageBox)
 from bench_stepgen import BenchStepgen, STEPGEN
 
 PREFIX = "hm2_7i96s.0"
@@ -46,16 +47,44 @@ def read_snapshot(reader):
 
 
 class MesaIOPanel(QWidget):
-    def __init__(self, reader, parent=None, writer=None, allow_bench=True):
+    def __init__(self, reader, parent=None, writer=None, allow_bench=True, backend=None):
         super().__init__(parent)
         self.reader = reader
         self.writer = writer
-        self.stepgen = BenchStepgen(writer, lambda: read_snapshot(self.reader)["healthy"])
+        self.test = None
+        if backend is not None:
+            from output_test import OutputTest, TestPassword
+            self.password = TestPassword()
+            self.test = OutputTest(backend, lambda i, on: write_output(reader, writer, i, on))
+            backend.output_test_stop = self.test.end
+        self.stepgen = BenchStepgen(writer if allow_bench else None,
+                                   lambda: read_snapshot(self.reader)["healthy"])
         layout = QVBoxLayout(self)
         title = QLabel("<h2>Mesa 7i96S — I/O monitor</h2>")
         layout.addWidget(title)
         layout.addWidget(QLabel("Real I/O and STEPGEN0 bench test. Left axis controls and laser scan are simulated."
-                               if allow_bench else "Real axes use LinuxCNC. Mesa I/O is read-only in this configuration."))
+                               if allow_bench else "Real axes use LinuxCNC. Unlock Output test to switch real outputs."))
+        if self.test:
+            controls = QHBoxLayout()
+            self.unlock_button = QPushButton("Unlock output test")
+            self.unlock_button.clicked.connect(self.unlock_test)
+            controls.addWidget(self.unlock_button)
+            self.lock_button = QPushButton("Stop tests / Lock")
+            self.lock_button.clicked.connect(self.lock_test)
+            controls.addWidget(self.lock_button)
+            self.rpm = QSpinBox()
+            self.rpm.setRange(1, int(float(backend.ini.find("DISPLAY", "MAX_SPINDLE_0_SPEED") or 1200)))
+            self.rpm.setValue(50)
+            self.rpm.setSuffix(" RPM")
+            controls.addWidget(self.rpm)
+            self.spindle_on = QPushButton("Spindle ON (forward)")
+            self.spindle_on.clicked.connect(self.start_spindle_test)
+            self.spindle_on.setEnabled(False)
+            controls.addWidget(self.spindle_on)
+            off = QPushButton("Spindle OFF")
+            off.clicked.connect(self.stop_spindle_test)
+            controls.addWidget(off)
+            layout.addLayout(controls)
         self.status = QLabel("Waiting for HAL")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -153,20 +182,26 @@ class MesaIOPanel(QWidget):
         return stopped
 
     def application_state_changed(self, state):
+        if state != Qt.ApplicationActive and self.test and self.test.active:
+            self.lock_test()
         if state != Qt.ApplicationActive and self.stepgen.active:
             self.stop_motor()
 
     def hideEvent(self, event):
+        if self.test and self.test.active:
+            self.lock_test()
         if self.stepgen.active:
             self.stop_motor()
         super().hideEvent(event)
 
     def shutdown(self):
         self.timer.stop()
+        if self.test:
+            self.lock_test()
         self.stop_motor()
 
     def refresh_motor(self, healthy):
-        ready = healthy and self.writer is not None
+        ready = healthy and self.stepgen.writer is not None
         try:
             self.reader(STEPGEN + ".enable")
         except Exception:
@@ -176,18 +211,29 @@ class MesaIOPanel(QWidget):
                 self.motor_status.setText("Motor stopped: Mesa/STEPGEN0 unavailable; release and press again after recovery")
         for button in self.motor_buttons:
             button.setEnabled(ready)
-        self.motor_stop.setEnabled(self.writer is not None)
+        self.motor_stop.setEnabled(self.stepgen.writer is not None)
         self.pulse_rate.setEnabled(not self.stepgen.active)
 
     def set_output(self, index, enabled):
         try:
-            write_output(self.reader, self.writer, index, enabled)
+            if self.test:
+                if enabled and not self.confirm_on(f"OUT{index}"):
+                    self.refresh()
+                    return
+                self.test.output(index, enabled)
+            else:
+                write_output(self.reader, self.writer, index, enabled)
             self.command_status.setText(f"OUT{index}: {'ON' if enabled else 'OFF'} command sent")
         except Exception as exc:
             self.command_status.setText(f"OUT{index} command failed: {exc}")
         self.refresh()
 
     def switch_all_off(self):
+        if self.test:
+            failures = self.test.end(force=True)
+            self.command_status.setText("; ".join(failures) if failures else "All outputs and spindle OFF commands sent")
+            self.refresh()
+            return
         failures = []
         for index in range(6):
             try:
@@ -198,6 +244,14 @@ class MesaIOPanel(QWidget):
         self.refresh()
 
     def refresh(self):
+        if self.test and self.test.active:
+            try:
+                ready = self.test.ready()
+            except Exception:
+                ready = False
+            if not ready:
+                failures = self.test.end()
+                self.command_status.setText("Test locked: machine unavailable. " + "; ".join(failures))
         try:
             snapshot = read_snapshot(self.reader)
         except Exception as exc:
@@ -226,5 +280,61 @@ class MesaIOPanel(QWidget):
             check.blockSignals(True)
             check.setChecked(bool(values[11 + index]) if values is not None else False)
             check.blockSignals(False)
-            check.setEnabled(values is not None and self.writer is not None)
+            check.setEnabled(values is not None and self.writer is not None and
+                             (self.test is None or self.test.active))
+        if self.test:
+            self.spindle_on.setEnabled(values is not None and self.test.active)
+            self.unlock_button.setText("Output test UNLOCKED" if self.test.active else "Unlock output test")
+
+    def confirm_on(self, target):
+        return QMessageBox.warning(self, "Real output test",
+            f"Enable {target}? Connected equipment may move or start immediately.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+
+    def unlock_test(self):
+        if self.test.active:
+            return
+        try:
+            creating = not self.password.exists()
+            value, ok = QInputDialog.getText(self, "Output test password",
+                "Create password (at least 6 characters)" if creating else "Password", QLineEdit.Password)
+            if not ok:
+                return
+            if creating:
+                again, ok = QInputDialog.getText(self, "Output test password", "Repeat password", QLineEdit.Password)
+                if not ok:
+                    return
+                if value != again:
+                    raise ValueError("Passwords do not match")
+                self.password.set(value)
+            elif not self.password.verify(value):
+                raise ValueError("Incorrect password")
+            if not self.confirm_on("OUTPUT TEST MODE (OUT0–OUT5 and spindle)"):
+                return
+            self.test.begin()
+            self.command_status.setText("Output test unlocked — axis jog and homing are blocked")
+        except Exception as exc:
+            QMessageBox.warning(self, "Output test", str(exc))
+        self.refresh()
+
+    def lock_test(self):
+        failures = self.test.end()
+        self.command_status.setText("; ".join(failures) if failures else "Test locked — OFF commands sent")
+        self.refresh()
+
+    def start_spindle_test(self):
+        if not self.confirm_on(f"SPINDLE at {self.rpm.value()} RPM (forward)"):
+            return
+        try:
+            self.test.spindle(True, self.rpm.value())
+            self.command_status.setText("Spindle ON command sent")
+        except Exception as exc:
+            self.command_status.setText(str(exc))
+
+    def stop_spindle_test(self):
+        try:
+            self.test.spindle(False)
+            self.command_status.setText("Spindle OFF command sent")
+        except Exception as exc:
+            self.command_status.setText(str(exc))
 
