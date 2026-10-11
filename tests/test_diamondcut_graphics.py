@@ -1,4 +1,4 @@
-"""Preview projection and Qt overlay integration without CNC hardware."""
+"""Preview projection and frame clearing integration without CNC hardware."""
 import importlib.util
 import os
 from pathlib import Path
@@ -42,6 +42,7 @@ class GraphicsTests(unittest.TestCase):
                                            linear_units=1, poll=MagicMock())
         self.widget.to_internal_units = lambda p: tuple(v / 25.4 for v in p)
         self.widget.extents_info = lambda: ((4, 0, 6), (2, 0, 2))
+        self.widget.hershey = MagicMock()
         self.widget.distance = 4
         self.widget.winfo_width = lambda:400
         self.widget.winfo_height = lambda:300
@@ -71,37 +72,33 @@ class GraphicsTests(unittest.TestCase):
         self.widget.set_eyepoint_from_extents.assert_called_once_with(12, 12)
         self.assertFalse(self.widget.perspective)
 
-    def test_native_paint_early_return_still_updates_overlay_and_coordinates(self):
+    def test_native_early_return_still_draws_markers_and_reports_position(self):
         matrix = ((1,0,0,0),(0,0,1,0),(0,-1,0,0),(0,0,0,1))
         self.gl.glGetDoublev.return_value = matrix
         self.widget.stat.actual_position = (50.8, 0, 76.2)
         self.widget.stat.tool_offset = (25.4, 0, 0)
+        captions = []
+        self.widget.preview_status.connect(captions.append)
+        self.widget.draw_screen_markers = MagicMock()
         self.widget.paintGL()
         self.assertTrue(self.widget.native_painted)
-        self.assertIn('X +0.000   Z +25.400 mm', self.widget.markers.caption)
-        self.assertGreater(self.widget.markers.origin[0], 200)
-        self.assertGreater(self.widget.markers.origin[1], 150)
-        self.assertGreater(self.widget.markers.tip[1], self.widget.markers.origin[1])
+        self.assertIn('X +0.000   Z +25.400 mm', captions[-1])
+        origin,tip = self.widget.draw_screen_markers.call_args.args
+        self.assertGreater(origin[0], 200)
+        self.assertGreater(origin[1], 150)
+        self.assertGreater(tip[1], origin[1])
         self.widget.stat.g5x_offset = (0,0,0)
         self.widget.paintGL()
-        self.assertEqual(self.widget.markers.origin, (200, 150))
+        self.assertEqual(self.widget.draw_screen_markers.call_args.args[0], (200, 150))
 
-    def test_qt_overlay_draws_cyan_origin_and_yellow_tool(self):
-        self.widget.markers.setGeometry(0,0,400,300)
-        self.widget.markers.origin = (100,150)
-        self.widget.markers.tip = (280,200)
-        self.widget.markers.caption = 'Tool Work: X +1.000 Z +2.000 mm'
-        self.widget.show()
-        self.app.processEvents()
-        image = self.widget.markers.grab().toImage()
-        cyan=yellow=0
-        for y in range(image.height()):
-            for x in range(image.width()):
-                color=image.pixelColor(x,y)
-                cyan += color.red()<30 and color.green()>220 and color.blue()>220
-                yellow += color.red()>220 and color.green()>190 and color.blue()<60
-        self.assertGreater(cyan,50)
-        self.assertGreater(yellow,50)
+    def test_every_frame_clears_before_native_render_and_markers(self):
+        self.gl.glGetDoublev.return_value = ((1,0,0,0),(0,1,0,0),(0,0,1,0),(0,0,0,1))
+        for _ in range(3):
+            self.widget.paintGL()
+        self.assertEqual(self.gl.glClear.call_count, 3)
+        self.assertEqual(self.gl.glColorMask.call_count, 3)
+        self.assertEqual(self.widget.findChildren(QWidget), [])
+        self.assertEqual(self.widget.hershey.plot_string.call_count, 3)
 
 
 if __name__ == '__main__':

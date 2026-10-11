@@ -2,45 +2,14 @@
 from math import cos, radians, sin
 
 from OpenGL import GL
-from PyQt5.QtCore import Qt, QPointF
-from PyQt5.QtGui import QColor, QPainter, QPen, QPolygonF
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtGui import QColor
 from qtvcp.widgets.gcode_graphics import GCodeGraphics
 
 
-class PreviewMarkers(QWidget):
-    """Qt overlay independent of the native tool/DRO OpenGL rendering."""
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WA_NoSystemBackground)
-        self.origin = self.tip = None
-        self.caption = ""
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(6, 6, self.width() - 12, 46, QColor(24, 27, 32, 235))
-        painter.setPen(QColor("white"))
-        painter.drawText(self.rect().adjusted(12, 8, -12, -8),
-                         Qt.AlignLeft | Qt.AlignTop, self.caption)
-        if self.tip is not None:
-            x, y = self.tip
-            painter.setPen(QPen(QColor("#ffdb19"), 2))
-            painter.setBrush(QColor("#ffdb19"))
-            painter.drawPolygon(QPolygonF([QPointF(x, y), QPointF(x - 9, y - 27),
-                                            QPointF(x + 9, y - 27)]))
-        if self.origin is not None:
-            x, y = self.origin
-            painter.setBrush(Qt.NoBrush)
-            painter.setPen(QPen(QColor("#00ffff"), 2))
-            painter.drawEllipse(QPointF(x, y), 8, 8)
-            painter.drawLine(QPointF(x - 12, y), QPointF(x + 12, y))
-            painter.drawLine(QPointF(x, y - 12), QPointF(x, y + 12))
-            painter.drawText(QPointF(x + 14, y - 12), "Work 0")
-
-
 class DiamondCutGraphics(GCodeGraphics):
+    preview_status = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         # The stock lathe renderer rotates the cone onto X. Our tool is on Z.
@@ -51,7 +20,7 @@ class DiamondCutGraphics(GCodeGraphics):
         self.show_overlay = False
         self.use_gradient_background = False
         self.setBackgroundColor(QColor(24, 27, 32))
-        self.markers = PreviewMarkers(self)
+
 
     def get_show_tool(self):
         # Draw our opaque marker last, rather than the translucent stock cone.
@@ -101,12 +70,6 @@ class DiamondCutGraphics(GCodeGraphics):
         GL.glNewList(number, GL.GL_COMPILE)
         GL.glEndList()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, "markers"):
-            self.markers.setGeometry(self.rect())
-            self.markers.raise_()
-
     def project_xz(self, point, matrix):
         # OpenGL stores basis vectors/translation in columns. Use the current
         # modelview, including user pan/rotation, with native ortho scale.
@@ -117,21 +80,66 @@ class DiamondCutGraphics(GCodeGraphics):
                 self.winfo_height() / 2 - eye[1] * scale)
 
     def paintGL(self):
-        # Capture the view before native rendering; its paintGL catches errors
-        # internally, so markers must not depend on reaching the end of redraw.
+        # One framebuffer for paths and markers. Always clear the full frame,
+        # including when the native renderer catches an error and returns early.
         matrix = GL.glGetDoublev(GL.GL_MODELVIEW_MATRIX)
+        GL.glDisable(GL.GL_SCISSOR_TEST)
+        GL.glDepthMask(GL.GL_TRUE)
+        GL.glColorMask(True, True, True, True)
+        GL.glClearColor(24 / 255, 27 / 255, 32 / 255, 1)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
         super().paintGL()
         self.stat.poll()
         origin, tip = self.work_origin(), self.tool_tip()
-        self.markers.origin = self.project_xz(origin, matrix)
-        self.markers.tip = self.project_xz(tip, matrix)
+        self.draw_screen_markers(self.project_xz(origin, matrix),
+                                 self.project_xz(tip, matrix))
         units = (self.stat.linear_units or 1) * 25.4
         dx, dy, dz = (a - b for a, b in zip(tip, origin))
         angle = radians(self.stat.rotation_xy)
         work_x = (cos(angle) * dx + sin(angle) * dy) * units
-        self.markers.caption = (
+        self.preview_status.emit(
             f"Tool Work: X {work_x:+.3f}   Z {dz * units:+.3f} mm\n"
             "Work 0: X 0.000   Z 0.000  |  Cyan origin / Yellow tool")
-        self.markers.setGeometry(self.rect())
-        self.markers.raise_()
-        self.markers.update()
+
+    def draw_screen_markers(self, origin, tip):
+        width, height = self.winfo_width(), self.winfo_height()
+        GL.glPushAttrib(GL.GL_ENABLE_BIT | GL.GL_CURRENT_BIT | GL.GL_LINE_BIT)
+        GL.glDisable(GL.GL_LIGHTING)
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glDisable(GL.GL_BLEND)
+        GL.glDisable(GL.GL_CULL_FACE)
+        GL.glMatrixMode(GL.GL_PROJECTION)
+        GL.glPushMatrix()
+        GL.glLoadIdentity()
+        GL.glOrtho(0, width, height, 0, -1, 1)
+        GL.glMatrixMode(GL.GL_MODELVIEW)
+        GL.glPushMatrix()
+        GL.glLoadIdentity()
+        try:
+            x, y = tip
+            GL.glColor3f(1, .85, .1)
+            GL.glBegin(GL.GL_TRIANGLES)
+            for px, py in ((x, y), (x - 9, y - 27), (x + 9, y - 27)):
+                GL.glVertex2f(px, py)
+            GL.glEnd()
+            x, y = origin
+            GL.glColor3f(0, 1, 1)
+            GL.glLineWidth(2)
+            GL.glBegin(GL.GL_LINES)
+            for px, py in ((x-12,y),(x+12,y),(x,y-12),(x,y+12)):
+                GL.glVertex2f(px, py)
+            GL.glEnd()
+            GL.glBegin(GL.GL_LINE_LOOP)
+            for step in range(32):
+                angle = radians(step * 360 / 32)
+                GL.glVertex2f(x + 8*cos(angle), y + 8*sin(angle))
+            GL.glEnd()
+            GL.glTranslatef(x + 14, y - 12, 0)
+            GL.glScalef(8, -8, 1)
+            self.hershey.plot_string("Work 0", .1)
+        finally:
+            GL.glPopMatrix()
+            GL.glMatrixMode(GL.GL_PROJECTION)
+            GL.glPopMatrix()
+            GL.glMatrixMode(GL.GL_MODELVIEW)
+            GL.glPopAttrib()

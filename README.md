@@ -113,8 +113,10 @@ The native preview starts in an orthographic X/Z view: X home at the left,
 Z home at the top, positive X right and positive Z down. The tip-position
 yellow cone silhouette stays aligned with Z, including when a tool-table entry is loaded.
 It uses actual position minus tool offset, with a dark gray background.
-Markers and live tool Work X/Z coordinates are painted in a separate Qt overlay,
-independent of the native OpenGL tool/DRO rendering and its hidden exceptions.
+Markers are drawn in the same OpenGL framebuffer as the paths, with a full
+clear on every frame. There is no transparent child widget over the native GL
+surface. Live tool Work X/Z coordinates appear in a regular label below the
+graph. Markers are added after native paintGL, even if it returns early.
 The cyan `Work 0` cross/circle follows the active G5x and G92 offsets, including
 when both offsets are zero. Reset X/Z view fits the program, machine origin
 work origin and actual tool tip and restores this orientation after panning or rotation.
