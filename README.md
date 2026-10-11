@@ -111,9 +111,11 @@ Spindle OFF and All outputs OFF require no password. Closing/hiding the Mesa tab
 
 The native preview starts in an orthographic X/Z view: X home at the left,
 Z home at the top, positive X right and positive Z down. The tip-position
-cone stays aligned with Z, including when a tool-table entry is loaded.
+yellow cone silhouette stays aligned with Z, including when a tool-table entry is loaded.
+It uses actual position minus tool offset, with a dark gray background and
+opaque markers drawn after the toolpath, unaffected by depth or alpha blending.
 The cyan `Work 0` cross/circle follows the active G5x and G92 offsets, including
 when both offsets are zero. Reset X/Z view fits the program, machine origin
-and work origin and restores this orientation after panning or rotation.
+work origin and actual tool tip and restores this orientation after panning or rotation.
 Y is not drawn as a cutting axis. These are renderer settings only; the
 PNCconf-generated kinematics, homing and motion configuration are unchanged.

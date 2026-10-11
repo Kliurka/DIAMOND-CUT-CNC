@@ -13,6 +13,8 @@ class GraphicsTests(unittest.TestCase):
         class GraphicsBase:
             def __init__(self, parent=None):
                 pass
+            def setBackgroundColor(self, color):
+                self.background = color
         modules = {"OpenGL": SimpleNamespace(GL=self.gl),
                    "qtvcp.widgets.gcode_graphics": SimpleNamespace(GCodeGraphics=GraphicsBase)}
         spec = importlib.util.spec_from_file_location(
@@ -24,6 +26,10 @@ class GraphicsTests(unittest.TestCase):
         self.widget.stat = SimpleNamespace(g5x_offset=(25.4, 0, 50.8),
                                            g92_offset=(0, 0, 0), rotation_xy=0,
                                            poll=MagicMock())
+        self.widget.stat.actual_position = (0, 0, 0)
+        self.widget.stat.tool_offset = (0, 0, 0)
+        self.widget.distance = 4
+        self.widget.winfo_width = lambda: 400
         self.widget.to_internal_units = lambda values: tuple(v / 25.4 for v in values)
         self.widget.extents_info = lambda: ((4, 0, 6), (2, 0, 2))
 
@@ -53,12 +59,32 @@ class GraphicsTests(unittest.TestCase):
     def test_origin_marker_is_drawn_even_without_coordinate_offsets(self):
         self.widget.hershey = MagicMock()
         self.widget.stat.g5x_offset = (0, 0, 0)
-        self.widget.user_plot()
+        self.widget.draw_markers()
         self.gl.glTranslatef.assert_any_call(0, 0, 0)
         self.widget.hershey.plot_string.assert_called_once_with("Work 0", 0.1)
         self.widget.stat.g5x_offset = (25.4, 0, 50.8)
-        self.widget.user_plot()
+        self.widget.draw_markers()
         self.gl.glTranslatef.assert_any_call(1, 0, 2)
+
+    def test_tool_marker_uses_actual_position_and_tool_offset(self):
+        self.widget.hershey = MagicMock()
+        self.widget.stat.actual_position = (254, 50.8, 127)
+        self.widget.stat.tool_offset = (25.4, 0, 50.8)
+        self.assertEqual(self.widget.tool_tip(), (9, 2, 3))
+        self.widget.draw_markers()
+        self.gl.glVertex3f.assert_any_call(9, 2, 3)
+        self.gl.glDisable.assert_any_call(self.gl.GL_BLEND)
+        self.gl.glDisable.assert_any_call(self.gl.GL_DEPTH_TEST)
+        self.assertFalse(self.widget.get_show_tool())
+
+    def test_reset_view_includes_tool_outside_program_extents(self):
+        self.widget.stat.actual_position = (254, 0, 254)
+        self.widget.reset = MagicMock()
+        self.widget.set_eyepoint_from_extents = MagicMock()
+        self.widget._redraw = MagicMock()
+        self.widget.set_view_y()
+        self.gl.glTranslatef.assert_called_once_with(-5, 0, -5)
+        self.widget.set_eyepoint_from_extents.assert_called_once_with(12, 12)
 
 
 if __name__ == "__main__":

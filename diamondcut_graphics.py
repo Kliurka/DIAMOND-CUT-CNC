@@ -2,6 +2,7 @@
 from math import cos, radians, sin
 
 from OpenGL import GL
+from PyQt5.QtGui import QColor
 from qtvcp.widgets.gcode_graphics import GCodeGraphics
 
 
@@ -14,6 +15,17 @@ class DiamondCutGraphics(GCodeGraphics):
         self.show_small_origin = False
         self.show_extents_option = False
         self.show_overlay = False
+        self.use_gradient_background = False
+        self.setBackgroundColor(QColor(24, 27, 32))
+
+    def get_show_tool(self):
+        # Draw our opaque marker last, rather than the translucent stock cone.
+        return False
+
+    def tool_tip(self):
+        return tuple(a - b for a, b in zip(
+            self.to_internal_units(self.stat.actual_position)[:3],
+            self.to_internal_units(self.stat.tool_offset)[:3]))
 
     def get_current_tool(self):
         # Always use a tip-position cone, even when a tool-table entry is loaded.
@@ -35,8 +47,9 @@ class DiamondCutGraphics(GCodeGraphics):
         self.stat.poll()
         mid, size = self.extents_info()
         origin = self.work_origin()
-        low = [min(mid[i] - size[i] / 2, origin[i], 0) for i in range(3)]
-        high = [max(mid[i] + size[i] / 2, origin[i], 0) for i in range(3)]
+        tip = self.tool_tip()
+        low = [min(mid[i] - size[i] / 2, origin[i], tip[i], 0) for i in range(3)]
+        high = [max(mid[i] + size[i] / 2, origin[i], tip[i], 0) for i in range(3)]
         mid = [(a + b) / 2 for a, b in zip(low, high)]
         GL.glTranslatef(*[-value for value in mid])
         self.set_eyepoint_from_extents(1.2 * (high[0] - low[0]),
@@ -53,14 +66,27 @@ class DiamondCutGraphics(GCodeGraphics):
         GL.glNewList(number, GL.GL_COMPILE)
         GL.glEndList()
 
-    def user_plot(self):
+    def redraw(self):
+        super().redraw()
+        self.draw_markers()
+
+    def draw_markers(self):
         # Draw every frame so touch-off/G54/G92 changes immediately move Work 0.
         origin = self.work_origin()
-        _, size = self.extents_info()
-        radius = max(size[0], size[2], 2) * 0.015
+        # Constant screen size also works before a program has been loaded.
+        radius = abs(self.distance or 1) ** .55555 * 16 / max(self.winfo_width(), 1)
         GL.glPushAttrib(GL.GL_ENABLE_BIT | GL.GL_CURRENT_BIT | GL.GL_LINE_BIT)
         GL.glDisable(GL.GL_LIGHTING)
         GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glDisable(GL.GL_BLEND)
+        GL.glDisable(GL.GL_CULL_FACE)
+        tip = self.tool_tip()
+        GL.glColor3f(1, 0.85, 0.1)
+        GL.glBegin(GL.GL_TRIANGLES)
+        GL.glVertex3f(*tip)
+        GL.glVertex3f(tip[0] - radius, tip[1], tip[2] - 3 * radius)
+        GL.glVertex3f(tip[0] + radius, tip[1], tip[2] - 3 * radius)
+        GL.glEnd()
         GL.glColor3f(0, 1, 1)
         GL.glLineWidth(2)
         GL.glPushMatrix()

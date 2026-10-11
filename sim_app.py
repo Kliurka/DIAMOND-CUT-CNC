@@ -659,7 +659,7 @@ class Window(QMainWindow):
             self.native_layout.removeWidget(self.native_label)
             self.native_label.hide()
             self.native_layout.addWidget(self.native_widget)
-            legend = QLabel("X home: left / +X: right   |   Z home: top / +Z: down   |   Cyan: Work 0")
+            legend = QLabel("X home: left / +X: right   |   Z home: top / +Z: down\nCyan: Work 0   |   Yellow cone: actual tool tip")
             legend.setWordWrap(True)
             self.native_layout.addWidget(legend)
             reset_view = QPushButton("Reset X/Z view")
