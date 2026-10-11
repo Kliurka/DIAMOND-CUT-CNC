@@ -6,6 +6,21 @@ from profile import PassSpec, Sample, generate_gcode, load_csv, save_csv, simula
 
 
 class ProfileTests(unittest.TestCase):
+    def test_work_x_clearance_is_above_whole_profile_and_depth_points_down(self):
+        points = [Sample(0, 2, 10), Sample(5, -1, 15), Sample(10, 3, 20)]
+        code = generate_gcode(points, passes=2, total_depth=.2, max_depth=.5,
+                              feed=30, rpm=500, surface_speed=100,
+                              max_rpm=1200, safe_z=5)
+        self.assertEqual(code.count('G0 Z-6.0000'), 4)
+        self.assertIn('G1 Z2.1000', code)
+        self.assertIn('G1 X15.0000 Z-0.8000', code)
+        self.assertIn('G1 X20.0000 Z3.2000', code)
+        # Every rapid X move is preceded by clearance above min(surface Z).
+        lines = code.splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith('G0 X'):
+                self.assertEqual(lines[index-1], 'G0 Z-6.0000')
+
     def test_work_x_survives_smoothing_csv_and_toolpath_offsets(self):
         points = smooth(simulated_scan_range(-12, 22, 2), 3, 3)
         with tempfile.TemporaryDirectory() as folder:

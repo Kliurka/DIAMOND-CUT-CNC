@@ -112,10 +112,17 @@ Spindle OFF and All outputs OFF require no password. Closing/hiding the Mesa tab
 The native preview starts in an orthographic X/Z view: X home at the left,
 Z home at the top, positive X right and positive Z down. The tip-position
 yellow cone silhouette stays aligned with Z, including when a tool-table entry is loaded.
-It uses actual position minus tool offset, with a dark gray background and
-opaque markers drawn after the toolpath, unaffected by depth or alpha blending.
+It uses actual position minus tool offset, with a dark gray background.
+Markers and live tool Work X/Z coordinates are painted in a separate Qt overlay,
+independent of the native OpenGL tool/DRO rendering and its hidden exceptions.
 The cyan `Work 0` cross/circle follows the active G5x and G92 offsets, including
 when both offsets are zero. Reset X/Z view fits the program, machine origin
 work origin and actual tool tip and restores this orientation after panning or rotation.
 Y is not drawn as a cutting axis. These are renderer settings only; the
 PNCconf-generated kinematics, homing and motion configuration are unchanged.
+
+For work-X profiles on this machine, -Z retracts up and +Z cuts down.
+Pass depth is added to the scanned surface Z. Each rapid X move occurs at
+min(surface Z) minus safe clearance, above the entire profile. Regenerate the
+preview after updating; previously saved G-code retains its old Z signs.
+The legacy rim-radius API retains its historical +Z clearance convention.

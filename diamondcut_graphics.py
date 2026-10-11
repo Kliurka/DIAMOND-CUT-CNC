@@ -2,8 +2,42 @@
 from math import cos, radians, sin
 
 from OpenGL import GL
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt, QPointF
+from PyQt5.QtGui import QColor, QPainter, QPen, QPolygonF
+from PyQt5.QtWidgets import QWidget
 from qtvcp.widgets.gcode_graphics import GCodeGraphics
+
+
+class PreviewMarkers(QWidget):
+    """Qt overlay independent of the native tool/DRO OpenGL rendering."""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+        self.origin = self.tip = None
+        self.caption = ""
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.fillRect(6, 6, self.width() - 12, 46, QColor(24, 27, 32, 235))
+        painter.setPen(QColor("white"))
+        painter.drawText(self.rect().adjusted(12, 8, -12, -8),
+                         Qt.AlignLeft | Qt.AlignTop, self.caption)
+        if self.tip is not None:
+            x, y = self.tip
+            painter.setPen(QPen(QColor("#ffdb19"), 2))
+            painter.setBrush(QColor("#ffdb19"))
+            painter.drawPolygon(QPolygonF([QPointF(x, y), QPointF(x - 9, y - 27),
+                                            QPointF(x + 9, y - 27)]))
+        if self.origin is not None:
+            x, y = self.origin
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor("#00ffff"), 2))
+            painter.drawEllipse(QPointF(x, y), 8, 8)
+            painter.drawLine(QPointF(x - 12, y), QPointF(x + 12, y))
+            painter.drawLine(QPointF(x, y - 12), QPointF(x, y + 12))
+            painter.drawText(QPointF(x + 14, y - 12), "Work 0")
 
 
 class DiamondCutGraphics(GCodeGraphics):
@@ -17,6 +51,7 @@ class DiamondCutGraphics(GCodeGraphics):
         self.show_overlay = False
         self.use_gradient_background = False
         self.setBackgroundColor(QColor(24, 27, 32))
+        self.markers = PreviewMarkers(self)
 
     def get_show_tool(self):
         # Draw our opaque marker last, rather than the translucent stock cone.
@@ -66,43 +101,37 @@ class DiamondCutGraphics(GCodeGraphics):
         GL.glNewList(number, GL.GL_COMPILE)
         GL.glEndList()
 
-    def redraw(self):
-        super().redraw()
-        self.draw_markers()
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "markers"):
+            self.markers.setGeometry(self.rect())
+            self.markers.raise_()
 
-    def draw_markers(self):
-        # Draw every frame so touch-off/G54/G92 changes immediately move Work 0.
-        origin = self.work_origin()
-        # Constant screen size also works before a program has been loaded.
-        radius = abs(self.distance or 1) ** .55555 * 16 / max(self.winfo_width(), 1)
-        GL.glPushAttrib(GL.GL_ENABLE_BIT | GL.GL_CURRENT_BIT | GL.GL_LINE_BIT)
-        GL.glDisable(GL.GL_LIGHTING)
-        GL.glDisable(GL.GL_DEPTH_TEST)
-        GL.glDisable(GL.GL_BLEND)
-        GL.glDisable(GL.GL_CULL_FACE)
-        tip = self.tool_tip()
-        GL.glColor3f(1, 0.85, 0.1)
-        GL.glBegin(GL.GL_TRIANGLES)
-        GL.glVertex3f(*tip)
-        GL.glVertex3f(tip[0] - radius, tip[1], tip[2] - 3 * radius)
-        GL.glVertex3f(tip[0] + radius, tip[1], tip[2] - 3 * radius)
-        GL.glEnd()
-        GL.glColor3f(0, 1, 1)
-        GL.glLineWidth(2)
-        GL.glPushMatrix()
-        GL.glTranslatef(*origin)
-        GL.glRotatef(-90, 1, 0, 0)  # readable text in the default X/Z view
-        GL.glBegin(GL.GL_LINES)
-        for x, y in ((-radius, 0), (radius, 0), (0, -radius), (0, radius)):
-            GL.glVertex3f(x, y, 0)
-        GL.glEnd()
-        GL.glBegin(GL.GL_LINE_LOOP)
-        for step in range(32):
-            angle = step * 2 * 3.141592653589793 / 32
-            GL.glVertex3f(radius * cos(angle), radius * sin(angle), 0)
-        GL.glEnd()
-        GL.glTranslatef(radius * 1.5, radius * 1.5, 0)
-        GL.glScalef(radius, radius, radius)
-        self.hershey.plot_string("Work 0", 0.1)
-        GL.glPopMatrix()
-        GL.glPopAttrib()
+    def project_xz(self, point, matrix):
+        # OpenGL stores basis vectors/translation in columns. Use the current
+        # modelview, including user pan/rotation, with native ortho scale.
+        vector = (*point, 1)
+        eye = [sum(vector[j] * matrix[j][i] for j in range(4)) for i in range(2)]
+        scale = self.winfo_width() / (2 * abs(self.distance or 1) ** .55555)
+        return (self.winfo_width() / 2 + eye[0] * scale,
+                self.winfo_height() / 2 - eye[1] * scale)
+
+    def paintGL(self):
+        # Capture the view before native rendering; its paintGL catches errors
+        # internally, so markers must not depend on reaching the end of redraw.
+        matrix = GL.glGetDoublev(GL.GL_MODELVIEW_MATRIX)
+        super().paintGL()
+        self.stat.poll()
+        origin, tip = self.work_origin(), self.tool_tip()
+        self.markers.origin = self.project_xz(origin, matrix)
+        self.markers.tip = self.project_xz(tip, matrix)
+        units = (self.stat.linear_units or 1) * 25.4
+        dx, dy, dz = (a - b for a, b in zip(tip, origin))
+        angle = radians(self.stat.rotation_xy)
+        work_x = (cos(angle) * dx + sin(angle) * dy) * units
+        self.markers.caption = (
+            f"Tool Work: X {work_x:+.3f}   Z {dz * units:+.3f} mm\n"
+            "Work 0: X 0.000   Z 0.000  |  Cyan origin / Yellow tool")
+        self.markers.setGeometry(self.rect())
+        self.markers.raise_()
+        self.markers.update()

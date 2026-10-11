@@ -144,8 +144,10 @@ def generate_gcode(
         if any(x < 0 for x in xs) or any(xs[i] <= xs[i+1] for i in range(len(xs)-1)):
             raise ValueError("X values must descend toward, but not beyond, spindle center")
     zprofile = [s.z_mm + tool_z_offset - sensor_z_offset for s in samples]
-    # Positive Z points away from the face in this provisional geometry.
-    if any(z + safe_z <= z for z in zprofile):
+    # Current machine: -Z is up/clearance, +Z is down/into the face.
+    z_sign = 1 if rim_radius is None else -1
+    clearance = min(zprofile) - safe_z if z_sign == 1 else max(zprofile) + safe_z
+    if not all(math.isfinite(z) for z in zprofile) or not math.isfinite(clearance):
         raise ValueError("Invalid safe Z")
     lines = [
         "(SIMULATION PREVIEW - VERIFY COORDINATES AND CLEARANCES BEFORE MACHINE USE)",
@@ -160,14 +162,13 @@ def generate_gcode(
         lines.append(f"(PASS {number}/{len(active)}; depth {depth:.4f} mm)")
         lines.append(f"G96 D{max_rpm} S{setting.surface_speed:.3f}" if use_css else f"G97 S{setting.rpm}")
         lines.append(f"F{setting.feed:.4f}")
-        lines.append(f"G0 Z{zprofile[0] + safe_z:.4f}")
+        lines.append(f"G0 Z{clearance:.4f}")
         lines.append(f"G0 X{xs[0]:.4f}")
-        lines.append(f"G1 Z{zprofile[0] - depth:.4f}")
+        lines.append(f"G1 Z{zprofile[0] + z_sign * depth:.4f}")
         for x, z in zip(xs[1:], zprofile[1:]):
-            lines.append(f"G1 X{x:.4f} Z{z - depth:.4f}")
-        lines.append(f"G0 Z{zprofile[-1] - depth + safe_z:.4f}")
-        # Retract above the outer edge before the next entry.
-        lines.append(f"G0 Z{max(zprofile) + safe_z:.4f}")
+            lines.append(f"G1 X{x:.4f} Z{z + z_sign * depth:.4f}")
+        # Clear the entire profile before any rapid X return.
+        lines.append(f"G0 Z{clearance:.4f}")
         lines.append(f"G0 X{xs[0]:.4f}")
     lines += ["M5", "G97 G94", "M2"]
     return "\n".join(lines) + "\n"
