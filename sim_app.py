@@ -206,6 +206,18 @@ class Window(QMainWindow):
         movement.addWidget(QLabel("X / Z"), 1, 1, alignment=Qt.AlignCenter)
         layout.addLayout(movement)
         root.addWidget(jog)
+        table = QGroupBox("Table lift")
+        table_layout = QVBoxLayout(table)
+        table_layout.addWidget(QLabel("Hold to raise or lower the table."))
+        self.table_buttons = []
+        for label, sign in (("Table Up", 1), ("Table Down", -1)):
+            button = QPushButton(label)
+            button.pressed.connect(lambda s=sign: self.table_pressed(s))
+            button.released.connect(self.table_released)
+            table_layout.addWidget(button)
+            self.table_buttons.append(button)
+            self.jog_buttons.append(button)
+        root.addWidget(table)
         root.addStretch()
         return pane
 
@@ -403,10 +415,25 @@ class Window(QMainWindow):
         self.jog_timer.stop()
         self.jog_axis = None
 
+    def table_pressed(self, sign):
+        if self.backend is not None:
+            self.control_action(lambda: self.backend.jog("Y", sign, self.jog_speed.value()))
+        elif not self.estop:
+            self.jog_axis, self.jog_sign = "Y", sign
+            self.jog_timer.start()
+            self.machine["Y"] += sign * 0.8
+
+    def table_released(self):
+        if self.backend is not None:
+            self.control_action(self.backend.stop_jog)
+        else:
+            self.jog_timer.stop()
+            self.jog_axis = None
+
     def continuous_tick(self):
         if self.backend is not None:
             return
-        if self.estop or self.jog_axis is None or not self.continuous.isChecked():
+        if self.estop or self.jog_axis is None or (self.jog_axis != "Y" and not self.continuous.isChecked()):
             self.jog_released()
             return
         self.machine[self.jog_axis] += self.jog_sign * 0.8  # 10 mm/s, 80 ms simulated tick

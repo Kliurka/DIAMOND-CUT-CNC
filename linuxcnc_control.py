@@ -11,7 +11,6 @@ class LinuxCNCControl:
         self.stat = api.stat()
         self.cmd = api.command()
         self.healthy = healthy
-        self.no_force_homing = ini.find("TRAJ", "NO_FORCE_HOMING") == "1"
         kins = ini.find("KINS", "KINEMATICS") or ""
         coords = "".join((ini.find("TRAJ", "COORDINATES") or "").split()).upper()
         if kins.split()[0:1] != ["trivkins"] or coords != "XYZ":
@@ -52,7 +51,7 @@ class LinuxCNCControl:
         return {"machine": machine, "work": work, "ready": ready, "healthy": healthy,
                 "on": on, "estop": s.task_state == api.STATE_ESTOP,
                 "homed": all(s.homed[:3]), "homing": homing, "stationary": bool(s.inpos),
-                "can_touch_off": all(s.homed[:3]) or self.no_force_homing}
+                "can_touch_off": all(s.homed[:3])}
 
     def require_ready(self, homed=False):
         state = self.snapshot()
