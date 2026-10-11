@@ -89,7 +89,23 @@ def setup(source, repo_root):
                     "MAX_LINEAR_VELOCITY": str(maximum), "MIN_LINEAR_VELOCITY": "0.001",
                     "LATHE": "1", "GEOMETRY": "XZ"},
         "DIAMONDCUT": {"MOTION": "linuxcnc"},
+        "TRAJ": {"NO_FORCE_HOMING": "1"},
+        "JOINT_0": {"HOME_SEQUENCE": "2"},
+        "JOINT_2": {"HOME_SEQUENCE": "1"},
     })
+    # Y is a manual table with no home reference. LinuxCNC's global homing gate
+    # must allow MDI with unhomed Y; the screen still requires X/Z homing.
+    section = ""
+    lines = []
+    for line in updated.splitlines(keepends=True):
+        match = SECTION.match(line)
+        if match:
+            section = match.group(1).upper()
+        setting = SETTING.match(line)
+        if section == "JOINT_1" and setting and setting.group(1).upper() == "HOME_SEQUENCE":
+            continue
+        lines.append(line)
+    updated = "".join(lines)
     for link, target in links:
         if not link.is_symlink():
             link.symlink_to(target)

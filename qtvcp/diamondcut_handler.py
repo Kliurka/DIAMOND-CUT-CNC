@@ -29,10 +29,15 @@ class HandlerClass:
         if real:
             from linuxcnc_control import LinuxCNCControl
             backend = LinuxCNCControl(linuxcnc, ini, lambda: read_snapshot(hal.get_value)["healthy"])
+            self.hal.newpin("table-lock", hal.HAL_BIT, hal.HAL_IN)
+            self.hal["table-lock"] = False
         self.panel = Window(native_preview_factory=self.make_graphics, machine_backend=backend)
         self.panel.setWindowFlags(Qt.Widget)
         self.w.screenHost.layout().addWidget(self.panel)
         self.panel.show()
+        if real:
+            self.panel.machine_timer.timeout.connect(
+                lambda: self.panel.backend.set_table_locked(self.hal["table-lock"]))
         self.mesa_panel = MesaIOPanel(hal.get_value, self.panel,
                                      writer=None if real else hal.set_p, allow_bench=not real)
         tabs = self.panel.centralWidget().widget(1)
@@ -55,6 +60,16 @@ class HandlerClass:
         finally:
             if hasattr(self, "mesa_panel"):
                 self.mesa_panel.shutdown()
+
+    def processed_key_event__(self, receiver, event, is_pressed, key, code, shift, cntrl):
+        if self.panel and self.panel.table_key_event(receiver, event, is_pressed):
+            event.accept()
+            return True
+        if is_pressed:
+            receiver.keyPressEvent(event)
+        else:
+            receiver.keyReleaseEvent(event)
+        return True
 
 
 def get_handlers(halcomp, widgets, paths):

@@ -44,6 +44,25 @@ def make_backend():
 
 
 class ControlTests(unittest.TestCase):
+    def test_xz_homing_does_not_require_manual_table_homing(self):
+        b, s, c = make_backend()
+        s.homed = (1, 0, 1)
+        self.assertTrue(b.snapshot()["homed"])
+        b.zero("X")
+        self.assertIn(("mdi", ("G21 G10 L20 P0 X0",)), c.calls)
+
+    def test_table_lock_stops_table_and_blocks_restart_but_not_x(self):
+        b, s, c = make_backend()
+        b.jog("Y", 1, 30)
+        b.set_table_locked(True)
+        self.assertEqual(c.calls[-1], ("jog", (0, True, 1)))
+        with self.assertRaises(RuntimeError):
+            b.jog("Y", -1, 30)
+        b.jog("X", 1, 30)
+        b.stop_jog()
+        b.set_table_locked(False)
+        self.assertIsNone(b.active_jog)
+
     def test_constructor_sends_no_commands(self):
         b, s, c = make_backend()
         self.assertEqual(c.calls, [])

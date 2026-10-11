@@ -27,6 +27,7 @@ class LinuxCNCControl:
         if any(not math.isfinite(v) or v <= 0 for v in self.limits.values()):
             raise ValueError("Each axis needs a positive MAX_VELOCITY")
         self.active_jog = None
+        self.table_locked = False
 
     def snapshot(self):
         self.stat.poll()
@@ -50,8 +51,8 @@ class LinuxCNCControl:
         work["Y"] = -x * math.sin(angle) + y * math.cos(angle)
         return {"machine": machine, "work": work, "ready": ready, "healthy": healthy,
                 "on": on, "estop": s.task_state == api.STATE_ESTOP,
-                "homed": all(s.homed[:3]), "homing": homing, "stationary": bool(s.inpos),
-                "can_touch_off": all(s.homed[:3])}
+                "homed": bool(s.homed[0] and s.homed[2]), "homing": homing, "stationary": bool(s.inpos),
+                "can_touch_off": bool(s.homed[0] and s.homed[2]), "table_locked": self.table_locked}
 
     def require_ready(self, homed=False):
         state = self.snapshot()
@@ -59,7 +60,7 @@ class LinuxCNCControl:
             raise RuntimeError("Requires healthy Mesa, machine ON and idle Manual mode")
         if homed and not state["can_touch_off"]:
             raise RuntimeError("Press Home All first, wait for Homed, then set Work X/Z zero. "
-                               "LinuxCNC requires all configured joints homed, including hidden Y.")
+                               "X and Z must be homed; the manual table does not require homing.")
         return state
 
     def toggle_estop(self):
@@ -91,6 +92,8 @@ class LinuxCNCControl:
         if distance is not None and (not math.isfinite(distance) or distance <= 0):
             raise ValueError("Jog distance must be positive")
         self.require_ready()
+        if axis == "Y" and self.table_locked:
+            raise RuntimeError("Table is locked")
         self.stop_jog()
         mode = self.stat.motion_mode
         if mode not in (self.api.TRAJ_MODE_FREE, self.api.TRAJ_MODE_TELEOP):
@@ -128,6 +131,11 @@ class LinuxCNCControl:
         if self.cmd.wait_complete(1.0) != self.api.RCS_DONE:
             raise RuntimeError("Joint mode switch did not complete")
         self.cmd.home(-1)
+
+    def set_table_locked(self, locked):
+        self.table_locked = bool(locked)
+        if self.table_locked and self.active_jog is not None and self.active_jog[1] == 1:
+            self.stop_jog()
 
     def zero(self, axis):
         if axis not in AXES:

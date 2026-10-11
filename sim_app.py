@@ -89,6 +89,7 @@ class Window(QMainWindow):
         self.backend = machine_backend
         self.live_state = None
         self.control_error = ""
+        self.table_key = None
         self.native_preview_factory = native_preview_factory
         self.setWindowTitle("Diamond Cut CNC — Simulation")
         self.resize(1280, 790)
@@ -430,6 +431,28 @@ class Window(QMainWindow):
             self.jog_timer.stop()
             self.jog_axis = None
 
+    def table_key_event(self, receiver, event, pressed):
+        if event.key() not in (Qt.Key_PageUp, Qt.Key_PageDown):
+            return False
+        if event.isAutoRepeat():
+            return True
+        if not pressed:
+            if self.table_key == event.key():
+                self.table_key = None
+                self.table_released()
+            return True
+        from PyQt5.QtWidgets import QAbstractSpinBox, QLineEdit, QDialog, QAbstractItemView
+        widget = receiver
+        while widget is not None:
+            if isinstance(widget, (QAbstractSpinBox, QLineEdit, QTextEdit, QDialog, QAbstractItemView)):
+                return False
+            widget = widget.parentWidget()
+        if event.modifiers() != Qt.NoModifier or self.table_key is not None:
+            return True
+        self.table_key = event.key()
+        self.table_pressed(1 if event.key() == Qt.Key_PageUp else -1)
+        return True
+
     def continuous_tick(self):
         if self.backend is not None:
             return
@@ -492,9 +515,12 @@ class Window(QMainWindow):
                 pass
         for button in self.jog_buttons:
             button.setEnabled(ready)
+        for button in self.table_buttons:
+            button.setEnabled(ready and not (self.live_state or {}).get("table_locked", False))
 
     def application_state_changed(self, state):
         if self.backend is not None and state != Qt.ApplicationActive:
+            self.table_key = None
             self.control_action(self.backend.stop_jog)
 
     def shutdown(self):

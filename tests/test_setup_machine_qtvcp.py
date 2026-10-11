@@ -26,6 +26,8 @@ MAX_VELOCITY = 1.5
 [JOINT_0]
 P = 100
 STEP_SCALE = 320
+[JOINT_1]
+HOME_SEQUENCE = 3
 """
 
 
@@ -53,6 +55,10 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(data["DISPLAY", "LATHE"], "1")
             self.assertEqual(data["DISPLAY", "GEOMETRY"], "XZ")
             self.assertEqual(data["JOINT_0", "P"], "100")
+            self.assertNotIn(("JOINT_1", "HOME_SEQUENCE"), data)
+            self.assertEqual(data["JOINT_0", "HOME_SEQUENCE"], "2")
+            self.assertEqual(data["JOINT_2", "HOME_SEQUENCE"], "1")
+            self.assertEqual(data["TRAJ", "NO_FORCE_HOMING"], "1")
             self.assertIn("HALFILE = original.hal\nHALFILE = custom.hal", dest.read_text())
             self.assertEqual((config / "diamondcut_handler.py").resolve(), repo / "qtvcp/diamondcut_handler.py")
             source.write_text(SOURCE.replace("STEP_SCALE = 320", "STEP_SCALE = 640"))
