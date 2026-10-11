@@ -33,6 +33,14 @@ class PlaybackTests(unittest.TestCase):
             with self.subTest(code=code), self.assertRaises(ValueError):
                 parse_program(code)
 
+    def test_rapid_speed_is_axis_specific(self):
+        moves = parse_program('G0 X3\nG0 Z4', rapid={'X': 60, 'Z': 120})
+        self.assertEqual([m.speed for m in moves], [60, 120])
+        playback = Playback(moves, (0, 0))
+        self.assertEqual(playback.advance(3), (3, 0))
+        self.assertEqual(playback.advance(2), (3, 4))
+        self.assertTrue(playback.done)
+
     def test_comments_and_partial_axis_moves(self):
         moves = parse_program('(comment)\nF60\nG0 Z-1 ; rapid\nG1 X2', start=(1, 3))
         self.assertEqual([(m.x, m.z) for m in moves], [(1, -1), (2, -1)])

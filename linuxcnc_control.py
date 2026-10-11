@@ -4,7 +4,7 @@ from pathlib import Path
 import time
 
 from gcode_playback import parse_program
-from machine_settings import save_limits, validate_limits
+from machine_settings import save_limits, validate_limits, save_rapids
 
 AXES = "XYZ"
 
@@ -173,9 +173,19 @@ class LinuxCNCControl:
         save_limits(self.ini_path, limits)
         self.limits_pending = True
 
+    def save_rapid_speeds(self, speeds):
+        state = self.snapshot()
+        if (state['on'] or not state['stationary'] or state['homing']
+                or self.program_running or self.output_test_active or self.active_jog is not None):
+            raise RuntimeError('Turn Machine OFF and stop motion before saving rapid speeds')
+        if self.ini_path is None:
+            raise RuntimeError('Machine INI path is unavailable')
+        save_rapids(self.ini_path, speeds)
+        self.limits_pending = True
+
     def run_program(self, path):
         if self.limits_pending:
-            raise RuntimeError('Restart LinuxCNC to activate the saved machine limits')
+            raise RuntimeError('Restart LinuxCNC to activate the saved machine settings')
         state = self.require_ready(homed=True)
         if not state["stationary"] or self.active_jog is not None:
             raise RuntimeError("Stop motion before Run")

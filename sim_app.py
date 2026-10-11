@@ -4,18 +4,19 @@ import tempfile
 import time
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QSettings
 from PyQt5.QtGui import QColor, QPainter, QPen, QTextCursor, QTextFormat
 from PyQt5.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QMainWindow, QMessageBox, QPushButton, QRadioButton,
     QSpinBox, QSplitter, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView,
+    QTableWidget, QTableWidgetItem, QHeaderView, QPlainTextEdit, QScrollArea,
 )
 
 from profile import PassSpec, generate_gcode, load_csv, save_csv, simulated_scan_range, smooth
 from gcode_playback import Playback, parse_program
+from code_editor import GCodeText
 
 
 class Plot(QWidget):
@@ -86,9 +87,11 @@ def number(value, minimum, maximum, decimals=2, suffix=""):
 
 
 class Window(QMainWindow):
-    def __init__(self, native_preview_factory=None, machine_backend=None):
+    def __init__(self, native_preview_factory=None, machine_backend=None, user_settings=None):
         super().__init__()
         self.backend = machine_backend
+        self.preferences = user_settings if user_settings is not None else QSettings("DiamondCut", "Screen")
+        self.held_jog = None
         self.live_state = None
         self.control_error = ""
         self.table_key = None
@@ -185,12 +188,13 @@ class Window(QMainWindow):
         layout = QVBoxLayout(jog)
         self.continuous = QCheckBox("Continuous (hold button)")
         layout.addWidget(self.continuous)
-        if self.backend:
-            speed_row = QHBoxLayout()
-            speed_row.addWidget(QLabel("Jog speed"))
-            self.jog_speed = number(30, 0.1, min(self.backend.limits.values()) * 60, 1, " mm/min")
-            speed_row.addWidget(self.jog_speed)
-            layout.addLayout(speed_row)
+        speed_row = QHBoxLayout()
+        speed_row.addWidget(QLabel("Jog speed"))
+        jog_max = min(self.backend.limits[a] for a in 'XZ') * 60 if self.backend else 60000
+        self.jog_speed = number(min(30, jog_max), 0.1, jog_max, 1, " mm/min")
+        speed_row.addWidget(self.jog_speed)
+        layout.addLayout(speed_row)
+        layout.addWidget(QLabel("Hold Ctrl for X/Z rapid speed"))
         steps = QHBoxLayout()
         self.step_group = QButtonGroup(self)
         for index, value in enumerate((0.01, 0.1, 1, 5, 10)):
@@ -337,7 +341,7 @@ class Window(QMainWindow):
         self.execution_status.setWordWrap(True)
         turn_layout.addWidget(self.execution_status)
         preview = QSplitter(Qt.Horizontal)
-        self.code = QTextEdit(); self.code.setReadOnly(True); self.code.setPlaceholderText("Generated preview G-code appears here")
+        self.code = GCodeText(); self.code.setPlaceholderText("Generated preview G-code appears here")
         self.syncing_code_line = False
         self.selected_code_line = None
         self.code.cursorPositionChanged.connect(self.code_cursor_changed)
@@ -367,6 +371,27 @@ class Window(QMainWindow):
         self.tool_z = number(0, -1000, 1000, 3, " mm")
         self.safe_z = number(5, 0.1, 100, 2, " mm")
         self.max_depth = number(0.5, 0.001, 10, 3, " mm")
+        self.rapid_speed = {axis: number(self.backend.limits[axis] * 60 if self.backend else 600,
+                                         .1, 60000, 1, " mm/min") for axis in 'XZ'}
+        for axis in 'XZ':
+            form.addRow(axis + " rapid / G0 speed", self.rapid_speed[axis])
+        self.save_rapids_button = QPushButton("Save X/Z rapid speeds")
+        self.save_rapids_button.setEnabled(self.backend is not None and self.backend.ini_path is not None)
+        self.save_rapids_button.clicked.connect(self.save_rapid_settings)
+        form.addRow(self.save_rapids_button)
+        self.rapids_status = QLabel("X/Z: Machine OFF, save, then restart LinuxCNC. Also caps maximum axis feed speed.")
+        self.rapids_status.setWordWrap(True)
+        form.addRow(self.rapids_status)
+        y_max = self.backend.limits['Y'] * 60 if self.backend else 60000
+        self.table_speed = number(float(self.preferences.value('table_speed', min(30, y_max))),
+                                  .1, y_max, 1, " mm/min")
+        self.table_speed.valueChanged.connect(lambda value: self.preferences.setValue('table_speed', value))
+        form.addRow("Y table speed (buttons / Page Up, Down)", self.table_speed)
+        self.show_code_numbers = QCheckBox("Show G-code line numbers")
+        self.show_code_numbers.setChecked(self.preferences.value('show_code_numbers', True, type=bool))
+        self.code.set_line_numbers_visible(self.show_code_numbers.isChecked())
+        self.show_code_numbers.toggled.connect(self.set_code_numbers)
+        form.addRow(self.show_code_numbers)
         form.addRow("Passes", self.passes)
         form.addRow(QLabel("Changing Passes or Total depth rebuilds the pass table. Cells remain editable."))
         limits_group = QGroupBox("Machine coordinates — travel limits (mm)")
@@ -397,7 +422,10 @@ class Window(QMainWindow):
             ("Maximum total cut depth", self.max_depth),
         ):
             form.addRow(label, widget)
-        tabs.addTab(settings, "3. Settings")
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setWidget(settings)
+        tabs.addTab(settings_scroll, "3. Settings")
         return tabs
 
     def update_dros(self):
@@ -453,7 +481,10 @@ class Window(QMainWindow):
         if self.backend is not None:
             selected = self.step_group.checkedButton()
             distance = None if self.continuous.isChecked() else selected.property("step")
-            self.control_action(lambda: self.backend.jog(axis, sign, self.jog_speed.value(), distance))
+            self.held_jog_ctrl = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+            speed = self.rapid_speed[axis].value() if self.held_jog_ctrl else self.jog_speed.value()
+            self.held_jog = (axis, sign) if distance is None else None
+            self.control_action(lambda: self.backend.jog(axis, sign, speed, distance))
             return
         if self.estop:
             return
@@ -468,6 +499,7 @@ class Window(QMainWindow):
                 self.update_dros()
 
     def jog_released(self):
+        self.held_jog = None
         if self.backend is not None:
             if self.continuous.isChecked():
                 self.control_action(self.backend.stop_jog)
@@ -478,12 +510,13 @@ class Window(QMainWindow):
     def table_pressed(self, sign):
         if self.playback is not None:
             return
+        self.held_jog = None
         if self.backend is not None:
-            self.control_action(lambda: self.backend.jog("Y", sign, self.jog_speed.value()))
+            self.control_action(lambda: self.backend.jog("Y", sign, self.table_speed.value()))
         elif not self.estop:
             self.jog_axis, self.jog_sign = "Y", sign
             self.jog_timer.start()
-            self.machine["Y"] += sign * 0.8
+            self.continuous_tick()
 
     def table_released(self):
         if self.backend is not None:
@@ -505,7 +538,7 @@ class Window(QMainWindow):
         from PyQt5.QtWidgets import QAbstractSpinBox, QLineEdit, QDialog, QAbstractItemView
         widget = receiver
         while widget is not None:
-            if isinstance(widget, (QAbstractSpinBox, QLineEdit, QTextEdit, QDialog, QAbstractItemView)):
+            if isinstance(widget, (QAbstractSpinBox, QLineEdit, QTextEdit, QPlainTextEdit, QDialog, QAbstractItemView)):
                 return False
             widget = widget.parentWidget()
         if event.modifiers() != Qt.NoModifier or self.table_key is not None:
@@ -520,7 +553,13 @@ class Window(QMainWindow):
         if self.estop or self.jog_axis is None or (self.jog_axis != "Y" and not self.continuous.isChecked()):
             self.jog_released()
             return
-        self.machine[self.jog_axis] += self.jog_sign * 0.8  # 10 mm/s, 80 ms simulated tick
+        axis = self.jog_axis
+        if axis == 'Y':
+            speed = self.table_speed.value()
+        else:
+            speed = (self.rapid_speed[axis].value() if QApplication.keyboardModifiers() & Qt.ControlModifier
+                     else self.jog_speed.value())
+        self.machine[axis] += self.jog_sign * speed / 60 * .08
         self.update_dros()
 
     def control_action(self, action):
@@ -556,6 +595,16 @@ class Window(QMainWindow):
             self.estop_label.setText(label)
             self.power_button.setText("Machine OFF" if state["on"] else "Machine ON")
             ready = state["ready"]
+            if self.held_jog is not None:
+                if not ready or self.backend.active_jog is None:
+                    self.held_jog = None
+                else:
+                    ctrl = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+                    if ctrl != self.held_jog_ctrl:
+                        axis, sign = self.held_jog
+                        self.held_jog_ctrl = ctrl
+                        speed = self.rapid_speed[axis].value() if ctrl else self.jog_speed.value()
+                        self.backend.jog(axis, sign, speed)
             if state["running"]:
                 self.execution_status.setText(f"RUNNING — G-code line {state['current_line']}")
                 self.show_program_line(state['current_line'], executing=True)
@@ -575,6 +624,7 @@ class Window(QMainWindow):
             self.home_button.setEnabled(ready and state["stationary"])
         except Exception as exc:
             self.live_state = None
+            self.held_jog = None
             ready = False
             self.run_button.setEnabled(False)
             self.simulate_button.setEnabled(False)
@@ -599,6 +649,7 @@ class Window(QMainWindow):
             self.control_action(self.backend.stop_jog)
 
     def shutdown(self):
+        self.preferences.sync()
         self.stop_simulation()
         if self.backend is not None:
             self.machine_timer.stop()
@@ -695,7 +746,9 @@ class Window(QMainWindow):
         if not self.generate():
             return
         try:
-            moves = parse_program(self.code.toPlainText(), start=start)
+            rapids = {axis: min(box.value(), self.backend.limits[axis] * 60) if self.backend else box.value()
+                      for axis, box in self.rapid_speed.items()}
+            moves = parse_program(self.code.toPlainText(), start=start, rapid=rapids)
             self.playback = Playback(moves, start)
             self.playback_time = time.monotonic()
             self.native_widget.set_simulated_work_position(start)
@@ -797,6 +850,22 @@ class Window(QMainWindow):
     def update_pass_defaults(self, column, value, decimals):
         for row in range(self.pass_table.rowCount()):
             self.pass_table.item(row, column).setText(f"{value:.{decimals}f}")
+
+    def set_code_numbers(self, visible):
+        self.code.set_line_numbers_visible(visible)
+        self.preferences.setValue('show_code_numbers', visible)
+
+    def save_rapid_settings(self):
+        if self.backend is None:
+            return
+        try:
+            if self.playback is not None:
+                raise RuntimeError("Stop simulation before saving rapid speeds")
+            self.backend.save_rapid_speeds({axis: box.value() for axis, box in self.rapid_speed.items()})
+            self.rapids_status.setText("Saved — restart LinuxCNC to activate X/Z rapid speeds. Run is blocked until restart.")
+            self.refresh_machine()
+        except (RuntimeError, ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Rapid speeds", str(exc))
 
     def save_machine_limits(self):
         if self.backend is None:

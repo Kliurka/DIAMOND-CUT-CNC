@@ -145,8 +145,8 @@ smoothed CSV and configure the enabled pass rows. Changing Passes or Total depth
 rebuilds the table automatically; changing the default feed/RPM/surface speed
 updates that column. Individual cells remain editable. **Simulate G-code** regenerates the program and animates the yellow tool
 marker from the current Work X/Z position. It sends no motion or spindle commands.
-The speed multiplier affects only this graphical playback; rapid moves use an
-approximate 600 mm/min, feed moves use their programmed F values. Acceleration
+The speed multiplier affects only this graphical playback; rapid moves use the X/Z rates from Settings, capped by the active machine
+velocity limits; feed moves use their programmed F values. Acceleration
 and spindle dynamics are not simulated. **Stop simulation** restores the actual
 tool marker. Simulation requires the native LinuxCNC QtVCP graph.
 
@@ -194,3 +194,24 @@ executing text line in green and scrolls it into view. It updates only when the
 line changes. After STOP/completion the last line remains selected in yellow.
 Line selection is a display action; Run continues to start the entire program
 from line 0.
+
+### Rapid jog, table speed and G-code line numbers
+
+**Settings** has independent **X rapid / G0 speed**, **Z rapid / G0 speed** and
+**Y table speed**, all in mm/min. Save X/Z rapid speeds with Machine OFF and restart
+LinuxCNC. This updates the corresponding AXIS/JOINT maximum velocities, preserves
+the stepgen velocity margin, and updates the trajectory velocity ceiling. These
+axis limits also cap cutting feeds. `diamondcut-rapids.json` preserves the values
+when the setup script is rerun after PNCconf regeneration. Run is blocked until
+restart after saving. Jog commands continue to respect the active machine limits.
+
+Hold **Ctrl** with an X/Z jog button to use that axis's rapid rate. For continuous
+jog, pressing/releasing Ctrl while holding the mouse button switches between
+rapid and the normal Jog speed. Incremental jog keeps its selected distance.
+Release still stops continuous jogging. The Y buttons and Page Up/Down always
+use the dedicated Settings Y speed, independent of normal Jog speed and Ctrl.
+The configured Y machine maximum velocity remains an upper bound.
+
+**Show G-code line numbers** toggles a separate margin beside the text. Numbers
+remain aligned while scrolling and do not alter saved or executed G-code. Y speed
+and the number-margin preference are remembered automatically on this computer.

@@ -14,7 +14,11 @@ class Move:
 
 def parse_program(code, start=(0, 0), rapid=600):
     x, z = start
-    if not all(math.isfinite(v) for v in (x, z, rapid)) or rapid <= 0:
+    rapid_axes = rapid if isinstance(rapid, dict) else {'X': rapid, 'Z': rapid}
+    if set(rapid_axes) != set('XZ'):
+        raise ValueError("Specify X and Z rapid speeds")
+    if (not all(math.isfinite(v) for v in (x, z, *rapid_axes.values()))
+            or any(v <= 0 for v in rapid_axes.values())):
         raise ValueError("Invalid playback start or rapid speed")
     feed = None
     moves = []
@@ -50,8 +54,13 @@ def parse_program(code, start=(0, 0), rapid=600):
         if axes:
             if motion is None or (motion == 1 and feed is None):
                 raise ValueError(f'Missing motion/feed at line {line}')
-            x, z = axes.get('X', x), axes.get('Z', z)
-            moves.append(Move(x, z, rapid if motion == 0 else feed, line))
+            nx, nz = axes.get('X', x), axes.get('Z', z)
+            duration = max(abs(nx - x) / rapid_axes['X'], abs(nz - z) / rapid_axes['Z'])
+            rapid_speed = math.hypot(nx - x, nz - z) / duration if duration else min(rapid_axes.values())
+            if not isinstance(rapid, dict):
+                rapid_speed = rapid
+            x, z = nx, nz
+            moves.append(Move(x, z, rapid_speed if motion == 0 else feed, line))
     if not moves:
         raise ValueError('Generate G-code first')
     return moves

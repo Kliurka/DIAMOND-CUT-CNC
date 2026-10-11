@@ -2,9 +2,10 @@
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import pyqtSignal, Qt, QSettings
 from PyQt5.QtWidgets import QApplication, QWidget
 from profile import Sample
 from sim_app import Window
@@ -36,13 +37,63 @@ class ExecutionUITests(unittest.TestCase):
     def setUp(self):
         self.backend, self.status, self.commands = make_backend()
         self.status.homed = (1, 0, 1)
-        self.window = Window(Preview, self.backend)
+        self.settings_folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.settings_folder.cleanup)
+        self.settings = QSettings(str(Path(self.settings_folder.name) / 'prefs.ini'), QSettings.IniFormat)
+        self.window = Window(Preview, self.backend, self.settings)
         self.window.machine_timer.stop()
         self.window.loaded_profile = [Sample(0, 1, 0), Sample(10, 1.1, 10)]
         self.warning = patch('sim_app.QMessageBox.warning').start()
         self.addCleanup(patch.stopall)
         self.addCleanup(self.window.close)
         self.addCleanup(self.window.shutdown)
+
+    def test_ctrl_uses_axis_rapid_and_switches_back_while_held(self):
+        self.window.continuous.setChecked(True)
+        self.window.jog_speed.setValue(12)
+        self.window.rapid_speed['X'].setValue(60)
+        with patch('sim_app.QApplication.keyboardModifiers', return_value=Qt.NoModifier):
+            self.window.jog_pressed('X', 1)
+        self.assertEqual(self.commands.calls[-1], ('jog', (1, True, 0, .2)))
+        with patch('sim_app.QApplication.keyboardModifiers', return_value=Qt.ControlModifier):
+            self.window.refresh_machine()
+        self.assertEqual(self.commands.calls[-1], ('jog', (1, True, 0, 1)))
+        with patch('sim_app.QApplication.keyboardModifiers', return_value=Qt.NoModifier):
+            self.window.refresh_machine()
+        self.assertEqual(self.commands.calls[-1], ('jog', (1, True, 0, .2)))
+        self.window.jog_released()
+        self.assertEqual(self.commands.calls[-1], ('jog', (0, True, 0)))
+        self.assertIsNone(self.window.held_jog)
+
+    def test_ctrl_increment_keeps_distance_and_y_is_independent(self):
+        self.window.continuous.setChecked(False)
+        self.window.rapid_speed['Z'].setValue(60)
+        with patch('sim_app.QApplication.keyboardModifiers', return_value=Qt.ControlModifier):
+            self.window.jog_pressed('Z', -1)
+        self.assertEqual(self.commands.calls[-1], ('jog', (2, True, 2, -1, 1)))
+        self.assertIsNone(self.window.held_jog)
+        self.window.jog_speed.setValue(12)
+        self.window.table_speed.setValue(42)
+        self.window.table_pressed(1)
+        self.assertEqual(self.commands.calls[-1], ('jog', (1, True, 1, .7)))
+        self.window.table_released()
+        self.window.jog_speed.setValue(24)
+        self.window.table_pressed(-1)
+        self.assertEqual(self.commands.calls[-1], ('jog', (1, True, 1, -.7)))
+        self.assertEqual(float(self.settings.value('table_speed')), 42)
+
+    def test_number_gutter_toggle_preserves_text_and_selected_line(self):
+        self.window.generate()
+        text = self.window.code.toPlainText()
+        self.window.show_program_line(12)
+        self.assertGreater(self.window.code.number_width(), 0)
+        self.window.show_code_numbers.setChecked(False)
+        self.assertEqual(self.window.code.number_width(), 0)
+        self.assertEqual(self.window.code.toPlainText(), text)
+        self.assertEqual(self.window.selected_code_line, (12, False))
+        self.assertFalse(self.settings.value('show_code_numbers', True, type=bool))
+        self.window.show_code_numbers.setChecked(True)
+        self.assertGreater(self.window.code.number_width(), 0)
 
     def test_graphic_selection_scrolls_text_without_commands(self):
         self.window.code.setPlainText('\n'.join(f'G1 X{i} Z0' for i in range(300)))
