@@ -99,6 +99,10 @@ class GraphicsTests(unittest.TestCase):
         self.assertEqual(self.gl.glColorMask.call_count, 3)
         self.assertEqual(self.widget.findChildren(QWidget), [])
         self.assertEqual(self.widget.hershey.plot_string.call_count, 3)
+        # Actual LinuxCNC Hershey repertoire, not a general text font.
+        supported = set('0123456789-.XYZGUVW')
+        for call in self.widget.hershey.plot_string.call_args_list:
+            self.assertTrue(set(call.args[0]) <= supported)
 
 
 if __name__ == '__main__':

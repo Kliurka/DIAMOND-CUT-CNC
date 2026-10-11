@@ -136,7 +136,8 @@ class DiamondCutGraphics(GCodeGraphics):
             GL.glEnd()
             GL.glTranslatef(x + 14, y - 12, 0)
             GL.glScalef(8, -8, 1)
-            self.hershey.plot_string("Work 0", .1)
+            # LinuxCNC Hershey only provides digits, XYZ/UVW, G, '-' and '.'.
+            self.hershey.plot_string("X0Z0", .1)
         finally:
             GL.glPopMatrix()
             GL.glMatrixMode(GL.GL_PROJECTION)
