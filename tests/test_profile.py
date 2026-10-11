@@ -6,6 +6,23 @@ from profile import PassSpec, Sample, generate_gcode, load_csv, save_csv, simula
 
 
 class ProfileTests(unittest.TestCase):
+    def test_work_x_survives_smoothing_csv_and_toolpath_offsets(self):
+        points = smooth(simulated_scan_range(-12, 22, 2), 3, 3)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "work.csv"
+            save_csv(path, points)
+            loaded = load_csv(path)
+            self.assertEqual(loaded[0].work_x_mm, -12)
+            self.assertEqual(loaded[-1].work_x_mm, 22)
+            options = dict(passes=1, total_depth=.1, max_depth=.5, feed=30,
+                           rpm=500, surface_speed=100, max_rpm=1200, safe_z=5,
+                           tool_x_offset=2, sensor_x_offset=1)
+            code = generate_gcode(loaded, **options)
+            self.assertIn("G0 X-11.0000", code)
+            self.assertIn("G1 X23.0000", code)
+            with self.assertRaises(ValueError):
+                generate_gcode(loaded, use_css=True, **options)
+
     def test_scan_and_filter_keep_x_positions(self):
         raw = simulated_scan(100, 1)
         filtered = smooth(raw)

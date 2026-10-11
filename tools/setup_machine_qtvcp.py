@@ -86,7 +86,8 @@ def setup(source, repo_root):
         raise ValueError("Update the repository with git pull first")
     updated = change_sections(contents, {
         "DISPLAY": {"DISPLAY": "qtvcp diamondcut", "DEFAULT_LINEAR_VELOCITY": str(min(0.5, maximum)),
-                    "MAX_LINEAR_VELOCITY": str(maximum), "MIN_LINEAR_VELOCITY": "0.001"},
+                    "MAX_LINEAR_VELOCITY": str(maximum), "MIN_LINEAR_VELOCITY": "0.001",
+                    "LATHE": "1", "GEOMETRY": "XZ"},
         "DIAMONDCUT": {"MOTION": "linuxcnc"},
     })
     for link, target in links:

@@ -108,7 +108,16 @@ class ControlTests(unittest.TestCase):
         s.homed = (1, 1, 1)
         b.zero("X")
         self.assertIn(("mdi", ("G21 G10 L20 P0 X0",)), c.calls)
-        self.assertEqual(c.calls[-1], ("mode", (1,)))
+        self.assertEqual(c.calls[-2:], [("mode", (1,)), ("wait_complete", (1.,))])
+
+    def test_zero_respects_existing_no_force_homing_setting(self):
+        ini = Ini()
+        ini.data["TRAJ", "NO_FORCE_HOMING"] = "1"
+        b, s, c = make_backend()
+        b = LinuxCNCControl(b.api, ini)
+        self.assertTrue(b.snapshot()["can_touch_off"])
+        b.zero("Z")
+        self.assertIn(("mdi", ("G21 G10 L20 P0 Z0",)), c.calls)
 
     def test_zero_timeout_aborts_and_restores_manual(self):
         b, s, c = make_backend()
@@ -117,7 +126,7 @@ class ControlTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             b.zero("Z")
         self.assertIn(("abort", ()), c.calls)
-        self.assertEqual(c.calls[-1], ("mode", (1,)))
+        self.assertEqual(c.calls[-2:], [("mode", (1,)), ("wait_complete", (1.,))])
 
     def test_home_and_zero_reject_motion(self):
         b, s, c = make_backend()

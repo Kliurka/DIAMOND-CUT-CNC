@@ -104,7 +104,7 @@ class Window(QMainWindow):
         split = QSplitter(Qt.Horizontal)
         split.addWidget(self.build_controls())
         split.addWidget(self.build_tabs())
-        split.setSizes([300, 980])
+        split.setSizes([350, 930])
         split.setChildrenCollapsible(False)
         self.setCentralWidget(split)
         self.update_dros()
@@ -123,7 +123,7 @@ class Window(QMainWindow):
 
     def build_controls(self):
         pane = QWidget()
-        pane.setMinimumWidth(240)
+        pane.setMinimumWidth(330)
         pane.setMaximumWidth(420)
         root = QVBoxLayout(pane)
         root.addWidget(QLabel("<h2>Machine control</h2><b>" +
@@ -133,7 +133,7 @@ class Window(QMainWindow):
         for col, label in enumerate(("Axis", "Machine", "Work")):
             grid.addWidget(QLabel(label), 0, col)
         self.dros = {}
-        for row, axis in enumerate(("X", "Z", "Y"), 1):
+        for row, axis in enumerate(("X", "Z"), 1):
             grid.addWidget(QLabel(axis), row, 0)
             self.dros[axis] = (QLabel(), QLabel())
             grid.addWidget(self.dros[axis][0], row, 1)
@@ -206,16 +206,6 @@ class Window(QMainWindow):
         movement.addWidget(QLabel("X / Z"), 1, 1, alignment=Qt.AlignCenter)
         layout.addLayout(movement)
         root.addWidget(jog)
-        table = QGroupBox("Table control (Y)")
-        table_layout = QVBoxLayout(table)
-        table_layout.addWidget(QLabel("Y is held at its set position during scanning and turning."))
-        for label, sign in (("Table Up (Y+)", 1), ("Table Down (Y−)", -1)):
-            button = QPushButton(label)
-            button.pressed.connect(lambda s=sign: self.jog_pressed("Y", s))
-            button.released.connect(self.jog_released)
-            table_layout.addWidget(button)
-            self.jog_buttons.append(button)
-        root.addWidget(table)
         root.addStretch()
         return pane
 
@@ -283,6 +273,8 @@ class Window(QMainWindow):
         self.surface_speed = number(150, 0.1, 5000, 1, " m/min")
         self.mode = QComboBox()
         self.mode.addItems(["G97 / G94 (RPM, mm/min)", "G96 / G95 (CSS, mm/rev)"])
+        self.mode.model().item(1).setEnabled(False)
+        self.mode.setToolTip("CSS requires X referenced to spindle center. Work-X profiles currently use G97.")
         self.mode.currentIndexChanged.connect(lambda index: self.feed.setValue(0.1 if index else 50))
         for index, (label, widget) in enumerate((
             ("Passes", self.passes), ("Total depth", self.depth),
@@ -327,20 +319,17 @@ class Window(QMainWindow):
         tabs.addTab(turning, "2. Toolpath & Turning")
         settings = QWidget()
         form = QFormLayout(settings)
-        self.radius = number(230, 10, 1000, 2, " mm")
         self.sensor_x = number(0, -1000, 1000, 3, " mm")
         self.sensor_z = number(0, -1000, 1000, 3, " mm")
         self.tool_x = number(0, -1000, 1000, 3, " mm")
         self.tool_z = number(0, -1000, 1000, 3, " mm")
         self.safe_z = number(5, 0.1, 100, 2, " mm")
         self.max_depth = number(0.5, 0.001, 10, 3, " mm")
-        self.y_position = number(0, -1000, 1000, 2, " mm")
         for label, widget in (
-            ("Rim radius at scan start (G-code X0 at center)", self.radius),
             ("Sensor X offset", self.sensor_x),
             ("Sensor Z offset", self.sensor_z), ("Tool X offset", self.tool_x),
             ("Tool Z offset", self.tool_z), ("Safe Z clearance", self.safe_z),
-            ("Maximum total cut depth", self.max_depth), ("Fixed Y table position", self.y_position),
+            ("Maximum total cut depth", self.max_depth),
         ):
             form.addRow(label, widget)
         tabs.addTab(settings, "3. Settings")
@@ -365,7 +354,8 @@ class Window(QMainWindow):
 
     def zero(self, axis):
         if self.backend is not None:
-            self.control_action(lambda: self.backend.zero(axis))
+            if not self.control_action(lambda: self.backend.zero(axis)):
+                QMessageBox.warning(self, "Work zero", self.control_error)
             return
         if self.estop: return
         self.offset[axis] = self.machine[axis]
@@ -423,13 +413,16 @@ class Window(QMainWindow):
         self.update_dros()
 
     def control_action(self, action):
+        success = False
         try:
             action()
             self.control_error = ""
+            success = True
         except Exception as exc:
             self.control_error = str(exc)
             self.statusBar().showMessage(f"LinuxCNC command failed: {exc}")
         self.refresh_machine()
+        return success
 
     def refresh_machine(self):
         try:
@@ -453,7 +446,9 @@ class Window(QMainWindow):
             self.power_button.setText("Machine OFF" if state["on"] else "Machine ON")
             ready = state["ready"]
             for button in self.zero_buttons:
-                button.setEnabled(ready and state["homed"] and state["stationary"])
+                button.setEnabled(ready and state["stationary"])
+                button.setToolTip("Set current position to zero in the active work coordinate system"
+                                  if state["can_touch_off"] else "Press Home All first and wait for Homed")
             self.home_button.setEnabled(ready and state["stationary"])
         except Exception as exc:
             self.live_state = None
@@ -491,7 +486,7 @@ class Window(QMainWindow):
     def scan(self):
         try:
             self.raw = simulated_scan_range(self.scan_start_x.value(), self.scan_end_x.value(),
-                                            self.scan_step.value(), self.radius.value())
+                                            self.scan_step.value())
             self.filtered = []
             self.scan_plot.raw, self.scan_plot.filtered = self.raw, []
             self.scan_plot.update()
@@ -531,7 +526,7 @@ class Window(QMainWindow):
                 raise ValueError("Load a saved smoothed CSV from the Scan tab first")
             settings = self.read_pass_rows()
             result = generate_gcode(
-                self.loaded_profile, rim_radius=self.radius.value(), passes=self.passes.value(),
+                self.loaded_profile, passes=self.passes.value(),
                 total_depth=self.depth.value(), max_depth=self.max_depth.value(),
                 feed=self.feed.value(), rpm=self.rpm.value(),
                 surface_speed=self.surface_speed.value(), max_rpm=self.max_rpm.value(),
@@ -562,9 +557,13 @@ class Window(QMainWindow):
         if not path: return
         try:
             self.loaded_profile = load_csv(path)
+            if any(p.work_x_mm is None for p in self.loaded_profile):
+                raise ValueError("This older CSV has no work X coordinates. Rescan and save the profile "
+                                 "with this version before generating a toolpath.")
             self.loaded_path.setText(f"Loaded: {path} ({len(self.loaded_profile)} points)")
             self.code.clear()
         except (ValueError, OSError) as exc:
+            self.loaded_profile = []
             QMessageBox.warning(self, "Profile", str(exc))
 
     def add_pass(self, depth=None):

@@ -50,6 +50,8 @@ class SetupTests(unittest.TestCase):
             data = values(dest.read_text())
             self.assertEqual(data["DIAMONDCUT", "MOTION"], "linuxcnc")
             self.assertEqual(data["DISPLAY", "DISPLAY"], "qtvcp diamondcut")
+            self.assertEqual(data["DISPLAY", "LATHE"], "1")
+            self.assertEqual(data["DISPLAY", "GEOMETRY"], "XZ")
             self.assertEqual(data["JOINT_0", "P"], "100")
             self.assertIn("HALFILE = original.hal\nHALFILE = custom.hal", dest.read_text())
             self.assertEqual((config / "diamondcut_handler.py").resolve(), repo / "qtvcp/diamondcut_handler.py")
