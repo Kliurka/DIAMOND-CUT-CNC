@@ -48,6 +48,37 @@ class ExecutionUITests(unittest.TestCase):
         self.addCleanup(self.window.close)
         self.addCleanup(self.window.shutdown)
 
+    def test_open_saved_gcode_simulates_and_runs_without_regenerating(self):
+        from test_linuxcnc_control import ProgramTests
+        path = Path(self.settings_folder.name) / 'saved.ngc'
+        path.write_text(ProgramTests.code)
+        self.window.loaded_profile = []
+        with patch('sim_app.QFileDialog.getOpenFileName', return_value=(str(path), '')):
+            self.window.open_gcode_button.click()
+        self.assertEqual(self.window.code.toPlainText(), ProgramTests.code)
+        self.assertEqual(self.window.opened_gcode, path)
+        self.assertEqual(self.commands.calls, [])
+        self.window.simulate_gcode()
+        self.assertIsNotNone(self.window.playback)
+        self.assertEqual(self.commands.calls, [])
+        self.window.stop_simulation()
+        self.window.run_gcode()
+        self.assertTrue(self.backend.program_running)
+        filename = next(args[0] for name, args in self.commands.calls if name == 'program_open')
+        self.assertEqual(Path(filename).read_text(), ProgramTests.code)
+        self.assertFalse(self.warning.called)
+
+    def test_open_failure_preserves_current_code_and_reset_button_calls_graph(self):
+        self.window.generate()
+        old = self.window.code.toPlainText()
+        with patch('sim_app.QFileDialog.getOpenFileName', return_value=('/missing/file.ngc', '')):
+            self.window.open_gcode()
+        self.assertEqual(self.window.code.toPlainText(), old)
+        self.assertIsNone(self.window.opened_gcode)
+        with patch.object(self.window.native_widget, 'reset_default_view') as reset:
+            self.window.reset_view_button.click()
+            reset.assert_called_once()
+
     def test_ctrl_uses_axis_rapid_and_switches_back_while_held(self):
         self.window.continuous.setChecked(True)
         self.window.jog_speed.setValue(12)

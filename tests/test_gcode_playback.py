@@ -33,6 +33,15 @@ class PlaybackTests(unittest.TestCase):
             with self.subTest(code=code), self.assertRaises(ValueError):
                 parse_program(code)
 
+    def test_imported_program_requires_explicit_modes_and_safe_end(self):
+        from test_linuxcnc_control import ProgramTests
+        self.assertTrue(parse_program(ProgramTests.code, require_preamble=True))
+        for code in ['G0 X1\nM2', ProgramTests.code.replace('G90', ''),
+                     ProgramTests.code.replace('M5\n', ''), ProgramTests.code.replace('M2\n', ''),
+                     ProgramTests.code + 'G0 X20\n']:
+            with self.subTest(code=code), self.assertRaises(ValueError):
+                parse_program(code, require_preamble=True)
+
     def test_rapid_speed_is_axis_specific(self):
         moves = parse_program('G0 X3\nG0 Z4', rapid={'X': 60, 'Z': 120})
         self.assertEqual([m.speed for m in moves], [60, 120])

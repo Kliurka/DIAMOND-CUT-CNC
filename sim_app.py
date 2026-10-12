@@ -291,6 +291,7 @@ class Window(QMainWindow):
         turn_layout.setContentsMargins(0, 0, 0, 0)
         upper_split.addWidget(machining_controls)
         self.loaded_profile = []
+        self.opened_gcode = None
         self.loaded_path = QLabel("No smoothed profile loaded")
         self.loaded_path.setWordWrap(True)
         turn_layout.addWidget(self.loaded_path)
@@ -336,6 +337,9 @@ class Window(QMainWindow):
         actions = QHBoxLayout()
         for label, callback in (("Generate preview", self.generate), ("Save G-code", self.save_gcode)):
             button = QPushButton(label); button.clicked.connect(callback); actions.addWidget(button)
+        self.open_gcode_button = QPushButton("Open G-code")
+        self.open_gcode_button.clicked.connect(self.open_gcode)
+        actions.addWidget(self.open_gcode_button)
         turn_layout.addLayout(actions)
         execution = QHBoxLayout()
         self.simulate_button = QPushButton("Simulate G-code")
@@ -343,6 +347,11 @@ class Window(QMainWindow):
         self.simulation_stop_button = QPushButton("Stop simulation")
         self.simulation_stop_button.clicked.connect(self.stop_simulation)
         self.run_button = QPushButton("Run G-code")
+        self.run_button.setStyleSheet(
+            "QPushButton {background: #9acff2; color: #16394f; border: 1px solid #71acd2; "
+            "border-radius: 3px; padding: 4px; font-weight: bold;}"
+            "QPushButton:hover {background: #b3ddf8;} QPushButton:pressed {background: #73b8e5;}"
+            "QPushButton:disabled {background: #dceaf3; color: #899ca9; border-color: #bfd3e0;}")
         self.run_button.clicked.connect(self.run_gcode)
         self.run_button.setEnabled(self.backend is not None)
         self.simulation_speed = number(10, .1, 100, 1, " ×")
@@ -353,9 +362,13 @@ class Window(QMainWindow):
         simulation_options.addWidget(QLabel("Simulation speed"))
         simulation_options.addWidget(self.simulation_speed)
         simulation_options.addStretch()
+        self.reset_view_button = QPushButton("Reset X/Z view")
+        self.reset_view_button.setEnabled(False)
+        self.reset_view_button.clicked.connect(self.reset_graph_view)
+        simulation_options.addWidget(self.reset_view_button)
         turn_layout.addLayout(simulation_options)
-        self.execution_status = QLabel("Simulation moves the graphic only. Run executes all passes and spindle commands.")
-        self.execution_status.setWordWrap(True)
+        self.execution_status = QLabel("", turning)
+        self.execution_status.hide()
 
         self.code = GCodeText(); self.code.setPlaceholderText("Generated preview G-code appears here")
         self.syncing_code_line = False
@@ -372,6 +385,7 @@ class Window(QMainWindow):
         turning_split.addWidget(upper_split)
         self.native_host = QWidget()
         self.native_layout = QVBoxLayout(self.native_host)
+        self.native_layout.setContentsMargins(0, 0, 0, 0)
         self.native_label = QLabel("LinuxCNC native GCodeGraphics is available in a running LinuxCNC/QtVCP context.\nNo substitute 3D plot is shown.")
         self.native_label.setWordWrap(True)
         self.native_layout.addWidget(self.native_label)
@@ -380,7 +394,6 @@ class Window(QMainWindow):
         turning_split.addWidget(self.native_host)
         turning_split.setSizes([410, 290])
         turn_root.addWidget(turning_split, 1)
-        turn_root.addWidget(self.execution_status)
         self.init_native_preview()
         tabs.addTab(turning, "2. Toolpath & Turning")
         settings = QWidget()
@@ -626,12 +639,13 @@ class Window(QMainWindow):
                         speed = self.rapid_speed[axis].value() if ctrl else self.jog_speed.value()
                         self.backend.jog(axis, sign, speed)
             if state["running"]:
-                self.execution_status.setText(f"RUNNING — G-code line {state['current_line']}")
+                self.set_execution_status(f"RUNNING — G-code line {state['current_line']}")
                 self.show_program_line(state['current_line'], executing=True)
             elif getattr(self, "was_running", False):
-                self.execution_status.setText("Program stopped / completed")
+                self.set_execution_status("Program stopped / completed")
                 if self.selected_code_line is not None:
                     self.show_program_line(self.selected_code_line[0])
+            self.open_gcode_button.setEnabled(not state["running"] and self.playback is None)
             self.was_running = state["running"]
             self.run_button.setEnabled(ready and state["homed"] and state["stationary"] and self.playback is None
                                        and not self.backend.limits_pending)
@@ -737,14 +751,11 @@ class Window(QMainWindow):
                 sensor_z_offset=self.sensor_z.value(), tool_x_offset=self.tool_x.value(),
                 tool_z_offset=self.tool_z.value(), use_css=self.mode.currentIndex() == 1,
                 pass_specs=settings)
-            self.syncing_code_line = True
-            try:
-                self.code.setPlainText(result)
-                self.code.setExtraSelections([])
-                self.selected_code_line = None
-                self.code_line_label.setText("Select a code line or a path segment")
-            finally:
-                self.syncing_code_line = False
+            was_opened = self.opened_gcode is not None
+            self.opened_gcode = None
+            self.set_program_text(result)
+            if was_opened:
+                self.loaded_path.setText(f"Generated from loaded profile ({len(self.loaded_profile)} points)")
             self.update_native_preview(result)
             return True
         except ValueError as exc:
@@ -763,19 +774,19 @@ class Window(QMainWindow):
             start = (state["work"]["X"], state["work"]["Z"])
         else:
             start = tuple(self.machine[a] - self.offset[a] for a in ("X", "Z"))
-        if not self.generate():
+        if not self.prepare_program():
             return
         try:
             rapids = {axis: min(box.value(), self.backend.limits[axis] * 60) if self.backend else box.value()
                       for axis, box in self.rapid_speed.items()}
-            moves = parse_program(self.code.toPlainText(), start=start, rapid=rapids)
+            moves = parse_program(self.code.toPlainText(), start=start, rapid=rapids, require_preamble=True)
             self.playback = Playback(moves, start)
             self.playback_time = time.monotonic()
             self.native_widget.set_simulated_work_position(start)
             self.playback_timer.start()
             self.run_button.setEnabled(False)
             self.simulate_button.setEnabled(False)
-            self.execution_status.setText("SIMULATION — graphic only, no machine commands")
+            self.set_execution_status("SIMULATION — graphic only, no machine commands")
         except Exception as exc:
             self.stop_simulation()
             QMessageBox.warning(self, "Simulation", str(exc))
@@ -789,7 +800,7 @@ class Window(QMainWindow):
         self.native_widget.set_simulated_work_position(position)
         if self.playback.done:
             self.stop_simulation()
-            self.execution_status.setText("Simulation completed — marker shows actual tool again")
+            self.set_execution_status("Simulation completed — marker shows actual tool again")
 
     def stop_execution(self):
         self.stop_simulation()
@@ -810,16 +821,16 @@ class Window(QMainWindow):
         if self.playback is not None:
             QMessageBox.warning(self, "Run", "Stop simulation first")
             return
-        if not self.generate():
+        if not self.prepare_program():
             return
         try:
             folder = Path(tempfile.mkdtemp(prefix="diamondcut-run-"))
             path = folder / "program.ngc"
             path.write_text(self.code.toPlainText(), encoding="utf-8")
             self.backend.run_program(path)
-            self.execution_status.setText("RUNNING — all enabled passes")
+            self.set_execution_status("RUNNING — all enabled passes")
         except Exception as exc:
-            self.execution_status.setText(f"Run blocked: {exc}")
+            self.set_execution_status(f"Run blocked: {exc}")
             QMessageBox.warning(self, "Run", str(exc))
         self.refresh_machine()
 
@@ -844,6 +855,7 @@ class Window(QMainWindow):
             if any(p.work_x_mm is None for p in self.loaded_profile):
                 raise ValueError("This older CSV has no work X coordinates. Rescan and save the profile "
                                  "with this version before generating a toolpath.")
+            self.opened_gcode = None
             self.loaded_path.setText(f"Loaded: {path} ({len(self.loaded_profile)} points)")
             self.code.clear()
         except (ValueError, OSError) as exc:
@@ -961,18 +973,51 @@ class Window(QMainWindow):
             self.native_layout.removeWidget(self.native_label)
             self.native_label.hide()
             self.native_layout.addWidget(self.native_widget, 1)
-            position_label = QLabel("Tool Work: waiting for LinuxCNC position")
-            self.native_widget.preview_status.connect(position_label.setText)
             self.native_widget.program_line_selected.connect(self.graphics_line_selected)
-            self.native_layout.addWidget(position_label)
-            legend = QLabel("X home: left / +X: right   |   Z home: top / +Z: down\nCyan: Work 0   |   Yellow cone: tool tip / simulation position")
-            legend.setWordWrap(True)
-            self.native_layout.addWidget(legend)
-            reset_view = QPushButton("Reset X/Z view")
-            reset_view.clicked.connect(self.native_widget.reset_default_view)
-            self.native_layout.addWidget(reset_view)
+            self.reset_view_button.setEnabled(True)
         except Exception as exc:
             self.native_label.setText(f"Native LinuxCNC preview unavailable: {exc}")
+
+    def set_execution_status(self, text):
+        self.execution_status.setText(text)
+        self.statusBar().showMessage(text)
+
+    def reset_graph_view(self):
+        if self.native_widget is not None:
+            self.native_widget.reset_default_view()
+
+    def set_program_text(self, code):
+        self.syncing_code_line = True
+        try:
+            self.code.setPlainText(code)
+            self.code.setExtraSelections([])
+            self.selected_code_line = None
+            self.code_line_label.setText("Select a code line or a path segment")
+        finally:
+            self.syncing_code_line = False
+
+    def prepare_program(self):
+        if self.opened_gcode is not None:
+            return bool(self.code.toPlainText().strip())
+        return self.generate()
+
+    def open_gcode(self):
+        if self.backend is not None and self.backend.program_running:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Open G-code", "", "G-code (*.ngc *.nc *.tap);;All files (*)")
+        if not path:
+            return
+        try:
+            code = Path(path).read_text(encoding="utf-8")
+            if not code.strip():
+                raise ValueError("G-code file is empty")
+            self.stop_simulation()
+            self.opened_gcode = Path(path)
+            self.set_program_text(code)
+            self.loaded_path.setText(f"Opened G-code: {path}")
+            self.update_native_preview(code)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Open G-code", str(exc))
 
     def update_native_preview(self, code):
         if self.native_widget is None:

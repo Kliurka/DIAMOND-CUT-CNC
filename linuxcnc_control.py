@@ -192,7 +192,7 @@ class LinuxCNCControl:
         if getattr(self.stat, "g5x_index", 1) != 1 or self.stat.rotation_xy != 0:
             raise RuntimeError("Run requires G54 with zero XY rotation")
         path = Path(path).resolve()
-        moves = parse_program(path.read_text(), start=(state["work"]["X"], state["work"]["Z"]))
+        moves = parse_program(path.read_text(), start=(state["work"]["X"], state["work"]["Z"]), require_preamble=True)
         for move in moves:
             for axis, value, index in (("X", move.x, 0), ("Z", move.z, 2)):
                 low = self.ini.find("AXIS_" + axis, "MIN_LIMIT")

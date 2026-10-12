@@ -223,3 +223,20 @@ machining controls and the pass table occupy the upper left, with G-code text in
 the upper right. The native X/Z graph spans the full width underneath. Drag the
 horizontal/vertical splitters to adjust text/control widths and graph height.
 Line selection and execution following work across this layout as before.
+
+### Open an existing G-code file
+
+**Open G-code** beside Save G-code loads `.ngc`, `.nc` or `.tap` text into the
+linked text/graph view. Simulate and Run use the opened code without regenerating
+it from the CSV; Generate preview explicitly replaces it with a new profile
+program. Loading a smoothed CSV switches back to profile generation.
+
+The native graph can preview files supported by LinuxCNC. Screen simulation and
+Run accept the existing straight X/Z G97/G94 program subset with explicit
+G21 G90 G40 G49 G54 G8 G94 G97 before motion, G97 before M3, M5 before M2, and an
+M2 ending. Unsupported/ambiguous programs are blocked before AUTO start. All
+existing homing, machine-state and machine-coordinate limit checks remain active.
+
+Run is light blue. Reset X/Z view is beside the simulation speed. The explanatory
+text beneath the graph is removed; execution and simulation status appear in the
+window status bar.
