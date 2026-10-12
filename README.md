@@ -215,3 +215,11 @@ The configured Y machine maximum velocity remains an upper bound.
 **Show G-code line numbers** toggles a separate margin beside the text. Numbers
 remain aligned while scrolling and do not alter saved or executed G-code. Y speed
 and the number-margin preference are remembered automatically on this computer.
+
+### Turning page layout
+
+Work X/Z zero buttons sit beside the corresponding Work DROs. In the turning tab,
+machining controls and the pass table occupy the upper left, with G-code text in
+the upper right. The native X/Z graph spans the full width underneath. Drag the
+horizontal/vertical splitters to adjust text/control widths and graph height.
+Line selection and execution following work across this layout as before.
