@@ -585,7 +585,7 @@ class Window(QMainWindow):
                     f'Move X to radius {-x:.3f} mm?\nRaise the tool clear of the rim first. Z will stay where it is.',
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                     return
-                if not self.control_action(lambda: self.backend.move_to_scan_x(x, self.jog_speed.value())):
+                if not self.control_action(lambda: self.backend.move_to_scan_x(x)):
                     raise RuntimeError(self.control_error)
             elif not self.estop:
                 self.machine['X'] = self.offset['X'] + x

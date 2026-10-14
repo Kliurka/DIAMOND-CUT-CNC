@@ -55,8 +55,8 @@ class ControlTests(unittest.TestCase):
         s.g5x_offset = (250., 0, 0)
         s.g92_offset = (0., 0, 0)
         b.x_center_reference = b.center_signature()
-        b.move_to_scan_x(-180, 30)
-        self.assertIn(('mdi', ('G21 G90 G54 G94 G1 X-180.000000 F30.000000',)), c.calls)
+        b.move_to_scan_x(-180)
+        self.assertIn(('mdi', ('G21 G90 G54 G0 X-180.000000',)), c.calls)
         self.assertTrue(b.positioning)
         self.assertFalse(b.snapshot()['ready'])
         s.interp_state = 2
@@ -76,10 +76,10 @@ class ControlTests(unittest.TestCase):
         s.homed = (1, 0, 1)
         s.tool_offset = (0, 0, 0)
         with self.assertRaises(RuntimeError):
-            b.move_to_scan_x(-20, 30)
+            b.move_to_scan_x(-20)
         b.x_center_reference = b.center_signature()
         with self.assertRaises(ValueError):
-            b.move_to_scan_x(-200, 30)
+            b.move_to_scan_x(-200)
         self.assertEqual(c.calls, [])
 
     def test_xz_homing_does_not_require_manual_table_homing(self):

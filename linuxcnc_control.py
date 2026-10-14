@@ -321,14 +321,14 @@ class LinuxCNCControl:
             raise ValueError('Only Z surface zero is supported; X is fixed to the spindle center')
         self.set_work_position(axis, 0)
 
-    def move_to_scan_x(self, work_x, feed):
+    def move_to_scan_x(self, work_x):
         if self.limits_pending:
             raise RuntimeError('Restart LinuxCNC after changing machine settings')
         state = self.require_ready(homed=True)
         if not state['stationary'] or self.active_jog is not None:
             raise RuntimeError('Stop motion before moving to the scan start')
-        if not math.isfinite(work_x) or work_x > 0 or not math.isfinite(feed) or feed <= 0:
-            raise ValueError('Invalid scan-start X or positioning feed')
+        if not math.isfinite(work_x) or work_x > 0:
+            raise ValueError('Invalid scan-start X')
         if getattr(self.stat, 'g5x_index', 1) != 1 or self.stat.rotation_xy != 0:
             raise RuntimeError('Scan-start move requires G54 with zero XY rotation')
         if self.x_center_reference is None or self.center_signature() != self.x_center_reference:
@@ -339,7 +339,6 @@ class LinuxCNCControl:
         lower, upper = self.coordinate_limits()['X']
         if not lower <= target <= upper:
             raise ValueError('Scan-start X is outside machine limits')
-        speed = min(feed, self.limits['X'] * 60)
         self.cmd.mode(self.api.MODE_MDI)
         try:
             if self.cmd.wait_complete(1) != self.api.RCS_DONE:
@@ -349,7 +348,7 @@ class LinuxCNCControl:
             self.positioning_seen_busy = False
             self.positioning_target = target
             self.positioning_error = ''
-            self.cmd.mdi(f'G21 G90 G54 G94 G1 X{work_x:.6f} F{speed:.6f}')
+            self.cmd.mdi(f'G21 G90 G54 G0 X{work_x:.6f}')
         except Exception:
             self.stop()
             self.cmd.mode(self.api.MODE_MANUAL)

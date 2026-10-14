@@ -316,7 +316,7 @@ does not change homing, physical motor direction, file coordinates or G96.
    reference, independent of each pass's cutting direction. Tool minus sensor X
    offset is applied exactly as in generation.
 3. Raise the tool clear of the rim, then press **Go to scan start X** and confirm.
-   This makes an X-only G1 move at the selected jog speed, capped to the X limit.
+   This makes an X-only G0 rapid move using the active machine X rapid limit.
    Z stays where it is. The desktop remains responsive, STOP aborts the move, and
    limits, homing, center calibration and controller health are checked.
 4. Lower the tool to touch the rim and press **0 beside Z**. With a profile loaded,
