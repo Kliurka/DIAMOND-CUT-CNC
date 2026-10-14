@@ -93,7 +93,7 @@ The script creates a separate `diamondcut-control.ini` beside the original INI, 
 
 The left panel displays **LINUXCNC — REAL AXES**. **Reset / E-stop** resets or asserts LinuxCNC E-stop; reset does not turn the machine on. **Machine ON/OFF** toggles machine power state. **STOP** stops this screen's jog and aborts current LinuxCNC activity. Continuous jog runs while holding a button and stops on release or application deactivation. With Continuous unchecked, pressing a button requests the selected increment; release does not cancel that increment, but STOP or application deactivation does. Speed is entered in mm/min and clamped to the axis velocity limit. Before homing it jogs the corresponding joint; in teleop mode it jogs the Cartesian axis. Communication faults disable jog controls, request stop and never restart motion on recovery.
 
-Machine and Work positions come from LinuxCNC status, including work, G92 and tool offsets and XY rotation. **Home All** uses the configured LinuxCNC homing sequence. The uploaded free-motor configuration has no connected home inputs or search/latch velocities, so it establishes the reference without searching for switches. Physical switch homing must be configured in PNCconf/INI/HAL with verified input channels, polarity, search direction, search/latch speeds and home offsets. Home All then invokes that configured procedure; the screen itself does not invent switch wiring or change homing parameters. **Set spindle center at known radius** in Settings sets the current tool-tip position to the negative known radius, establishing G54 X0 at the spindle center. **0 beside Work X** only zeros the operator display and marker; it does not change G54 or CSS. **0 beside Work Z** sets surface Z0 through G10 L20. These actions require X/Z homed and motion stopped. The screen does not bypass homing or auto-home. Before homing, clicking Zero Work explains the required Home All step instead of silently disabling the button. After touch-off, the backend waits for the return to Manual mode before refreshing the controls. Y remains a manual table joint. The setup script excludes Y from Home All in diamondcut-control.ini and sets Z then X homing. It adds NO_FORCE_HOMING for MDI with unhomed Y; the screen independently gates work-zero commands on X/Z homing. Rerun the setup script after every PNCconf regeneration. Page Up/Down jog the table while held, except when editing fields. The handler exports table-lock (HAL bit input): TRUE stops and blocks Y jog. It is unconnected by default; the physical part-change-window signal must be wired before that interlock is active. The generated launch INI uses LATHE=1 and GEOMETRY=XZ for the preview. Work-home movement remains disabled until clearance and geometry are verified. Laser scan remains synthetic. Generated G-code can be simulated graphically or executed with Run G-code. In this mode Mesa I/O offers a password-protected maintenance test; direct bench STEPGEN0 controls are hidden; the screen never writes stepgen pins owned by LinuxCNC.
+Machine and Work positions come from LinuxCNC status, including work, G92 and tool offsets and XY rotation. **Home All** uses the configured LinuxCNC homing sequence. The uploaded free-motor configuration has no connected home inputs or search/latch velocities, so it establishes the reference without searching for switches. Physical switch homing must be configured in PNCconf/INI/HAL with verified input channels, polarity, search direction, search/latch speeds and home offsets. Home All then invokes that configured procedure; the screen itself does not invent switch wiring or change homing parameters. **Set spindle center at known radius** in Settings sets the current tool-tip position to the negative known radius, establishing G54 X0 at the spindle center. X has no zero button: Work X shows the radius from the calibrated spindle center. **0 beside Work Z** sets surface Z0 through G10 L20. These actions require X/Z homed and motion stopped. The screen does not bypass homing or auto-home. Before homing, clicking Zero Work explains the required Home All step instead of silently disabling the button. After touch-off, the backend waits for the return to Manual mode before refreshing the controls. Y remains a manual table joint. The setup script excludes Y from Home All in diamondcut-control.ini and sets Z then X homing. It adds NO_FORCE_HOMING for MDI with unhomed Y; the screen independently gates work-zero commands on X/Z homing. Rerun the setup script after every PNCconf regeneration. Page Up/Down jog the table while held, except when editing fields. The handler exports table-lock (HAL bit input): TRUE stops and blocks Y jog. It is unconnected by default; the physical part-change-window signal must be wired before that interlock is active. The generated launch INI uses LATHE=1 and GEOMETRY=XZ for the preview. Go to scan start X positions X at the loaded profile reference point after the operator confirms the tool is clear; Z is unchanged. Laser scan remains synthetic. Generated G-code can be simulated graphically or executed with Run G-code. In this mode Mesa I/O offers a password-protected maintenance test; direct bench STEPGEN0 controls are hidden; the screen never writes stepgen pins owned by LinuxCNC.
 
 The user's VirtualBox free-motor test used SERVO_PERIOD = 10000000 ns, watchdog = 90000000 ns, and P = 100 for all three stepgen PID loops. These are bench settings, not validated machine timing. A 320 pulses/mm scale is provisional (1600 pulses/revolution with an assumed 5 mm/revolution); real mechanics require their actual scale. After changing PNCconf settings, test the original AXIS INI and rerun `setup_machine_qtvcp.py` to refresh the separate launch INI. PNCconf may regenerate manual timing/P edits, so keep those settings consistent in its project.
 
@@ -278,7 +278,7 @@ maximum commanded RPM for each segment. Reduce feed/rev or surface speed / maxim
 RPM if the selected pitch would exceed a limit. Loss of the feedback connection
 while executing G95 aborts the program. Existing soft limits and other interlocks
 remain enforced. An external X work-offset change invalidates the CSS center calibration.
-Recalibrate the center in Settings after changing tools or offsets. The operator X zero does not invalidate it.
+Recalibrate the center in Settings after changing tools or offsets. X has no operator zero.
 
 ### Touch input and independent pass modes
 
@@ -302,17 +302,28 @@ clearance between passes, and explicitly selects G97/G94 for positioning before
 G96/G95 cutting. A program containing any CSS/G95 pass needs the same real spindle
 feedback checks as a program using CSS throughout. Simulation supports mixed modes.
 
-### Operator X zero and axis feeds
+### Fixed X radius, scan reference positioning and Z touch-off
 
-The Work X DRO has an operator zero independent of the spindle-center G54 origin.
-Press 0 beside X at the desired point: only this DRO and the cyan X0Z0 marker change.
-The marker keeps the selected X and active surface Z0 when the tool lifts. A red
-vertical line marks the true spindle center. Center X shows the actual G54 X value;
-scan endpoints, saved CSV, generated G-code, playback and CSS always use that value.
-The Z DRO still uses the real surface work zero. Home All clears the operator X
-reference; it is not retained between sessions. Center calibration moved to Settings
-and also zeros the operator X display at the calibration point.
+X has no reset or operator offset. Work X and scan endpoints show a positive radius
+from the calibrated spindle center. The machine +X direction runs toward the center,
+so the G54 X coordinate and CSV/G-code remain negative (G8 radius mode). For example,
+with the center at Machine X250, Machine X70 reads Work radius180 and commands G54
+X-180. The separate G-code X label shows this signed coordinate. This display mapping
+does not change homing, physical motor direction, file coordinates or G96.
 
-Actual feed beside each X/Z row comes from that joint velocity, converted from
-mm/s to mm/min. Y motion is excluded. These are measured motion-controller speeds,
-not the selected jog speed or programmed F. Spindle actual remains measured RPM.
+1. Home X/Z and calibrate the spindle center at the measured radius in Settings.
+2. Load the saved smoothed spindle-center CSV. Its first sample defines Z surface
+   reference, independent of each pass's cutting direction. Tool minus sensor X
+   offset is applied exactly as in generation.
+3. Raise the tool clear of the rim, then press **Go to scan start X** and confirm.
+   This makes an X-only G1 move at the selected jog speed, capped to the X limit.
+   Z stays where it is. The desktop remains responsive, STOP aborts the move, and
+   limits, homing, center calibration and controller health are checked.
+4. Lower the tool to touch the rim and press **0 beside Z**. With a profile loaded,
+   Z touch-off is blocked until X is within 0.01 mm of the profile reference X.
+   The generator subtracts the first scan sample's Z baseline, preserving its shape.
+
+Do not recalibrate X to a new arbitrary point between scanning and turning. There
+is no X reset action. The red vertical preview line and cyan X0Z0 mark the real
+spindle-center X reference and surface Z0. Actual feed beside X/Z comes from each
+joint velocity in mm/min, excluding table Y. Spindle actual remains measured RPM.

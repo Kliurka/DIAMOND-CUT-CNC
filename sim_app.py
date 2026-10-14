@@ -45,7 +45,7 @@ class Plot(QWidget):
         def plot_x(sample):
             return sample.work_x_mm if use_work_x else sample.edge_mm
         painter.drawText(bounds.left(), self.height() - 12,
-                         'Work X (mm); +X right, +Z down' if use_work_x else 'Distance from scan start (mm); +Z down')
+                         'Radius to spindle center (mm); +Z down' if use_work_x else 'Distance from scan start (mm); +Z down')
         x_min = min(plot_x(s) for s in points)
         x_max = max(plot_x(s) for s in points)
         z_min = min(s.z_mm for s in points) - 0.2
@@ -70,8 +70,8 @@ class Plot(QWidget):
                     painter.drawLine(round(prev[0]), round(prev[1]), round(x), round(y))
                 prev = x, y
         painter.setPen(QColor("#8996a7"))
-        painter.drawText(bounds.left(), bounds.bottom() + 20, f"{x_min:.2f}")
-        painter.drawText(bounds.right() - 65, bounds.bottom() + 20, f"{x_max:.2f}")
+        painter.drawText(bounds.left(), bounds.bottom() + 20, f"{-x_min if use_work_x else x_min:.2f}")
+        painter.drawText(bounds.right() - 65, bounds.bottom() + 20, f"{-x_max if use_work_x else x_max:.2f}")
         ratio = scale_z / scale_x
         caption = f"Z magnified {ratio:.1f}x" if self.exaggerate_z else "X:Z = 1:1 (same mm scale)"
         painter.drawText(bounds.left(), bounds.top() - 10,
@@ -99,7 +99,6 @@ class Window(QMainWindow):
         self.held_jog = None
         self.live_state = None
         self.control_error = ""
-        self.operator_x_zero = None
         self.table_key = None
         self.native_preview_factory = native_preview_factory
         self.playback = None
@@ -163,11 +162,11 @@ class Window(QMainWindow):
             grid.addWidget(speed, row, 4)
             self.axis_feed_labels[axis] = speed
         self.zero_buttons = []
-        for row, axis in enumerate(("X", "Z"), 1):
+        for row, axis in ((2, 'Z'),):
             button = QPushButton("0")
             button.setFixedWidth(28)
             button.setToolTip(f"Zero Work {axis}")
-            button.setAccessibleName("Zero operator X display" if axis == "X" else "Zero Work Z")
+            button.setAccessibleName("Zero Work Z")
             button.clicked.connect(lambda _=False, a=axis: self.zero(a))
             grid.addWidget(button, row, 3)
             self.zero_buttons.append(button)
@@ -175,7 +174,7 @@ class Window(QMainWindow):
         control_width = max(330, group.minimumSizeHint().width() + 24)
         pane.setMinimumWidth(control_width)
         pane.setMaximumWidth(max(420, control_width))
-        self.center_x_label = QLabel('Center X: — mm')
+        self.center_x_label = QLabel('G-code X: — mm')
         self.actual_rpm_label = QLabel('Spindle actual: — RPM')
         self.center_x_label.setToolTip('True G54 X coordinate used by the G-code and CSS; zero is at the spindle center')
         self.actual_rpm_label.setToolTip('Measured spindle speed from the RPM sensor')
@@ -201,13 +200,11 @@ class Window(QMainWindow):
         self.home_button = machine_home
         machine_home.clicked.connect(self.home_machine)
         root.addWidget(machine_home)
-        work_home = QPushButton("Go to Work Home (simulated)")
-        work_home.clicked.connect(self.go_work_home)
-        root.addWidget(work_home)
-        if self.backend:
-            work_home.setText("Work-home move: not configured")
-            work_home.setEnabled(False)
-            work_home.setToolTip("Requires verified clearance and machine geometry")
+        self.scan_start_button = QPushButton('Go to scan start X')
+        self.scan_start_button.clicked.connect(self.go_scan_start)
+        self.scan_start_button.setEnabled(False)
+        self.scan_start_button.setToolTip('Raise the tool clear of the rim first. Moves X only to the loaded profile reference point.')
+        root.addWidget(self.scan_start_button)
         jog = QGroupBox("Jog X / Z")
         layout = QVBoxLayout(jog)
         self.continuous = QCheckBox("Continuous (hold button)")
@@ -260,14 +257,14 @@ class Window(QMainWindow):
         tabs = QTabWidget()
         scan = QWidget()
         scan_layout = QVBoxLayout(scan)
-        scan_layout.addWidget(QLabel("<h2>Scan</h2>Synthetic laser data; Work X0 is the spindle center."))
+        scan_layout.addWidget(QLabel("<h2>Scan</h2>Synthetic laser data; X values are radii from the spindle center."))
         scan_range = QGridLayout()
-        self.scan_start_x = number(-250, -1000, 0, 3, " mm")
-        self.scan_end_x = number(-20, -1000, 0, 3, " mm")
+        self.scan_start_x = number(250, 0, 1000, 3, " mm")
+        self.scan_end_x = number(20, 0, 1000, 3, " mm")
         self.scan_step = number(1, 0.01, 20, 2, " mm")
         self.scan_speed = number(600, 1, 10000, 1, " mm/min")
-        for col, (label, field) in zip((0, 3), (("X start (center)", self.scan_start_x),
-                                               ("X end (center)", self.scan_end_x))):
+        for col, (label, field) in zip((0, 3), (("X start radius", self.scan_start_x),
+                                               ("X end radius", self.scan_end_x))):
             scan_range.addWidget(QLabel(label), 0, col)
             scan_range.addWidget(field, 0, col + 1)
             capture = QPushButton("Use current X")
@@ -517,9 +514,9 @@ class Window(QMainWindow):
         for axis, (machine, work) in self.dros.items():
             machine.setText(f"{self.machine[axis]:+.4f}")
             work.setText(f"{self.machine[axis] - self.offset.get(axis, 0):+.4f}")
-            if axis == 'X' and self.operator_x_zero is not None:
-                work.setText(f"{self.machine[axis] - self.operator_x_zero:+.4f}")
-        self.center_x_label.setText(f"Center X: {self.machine['X'] - self.offset.get('X', 0):+.4f} mm")
+            if axis == 'X':
+                work.setText(f"{self.offset.get('X', 0) - self.machine['X']:.4f}")
+        self.center_x_label.setText(f"G-code X: {self.machine['X'] - self.offset.get('X', 0):+.4f} mm")
         self.estop_label.setText("RESET REQUIRED" if self.estop else "Simulated control enabled")
 
     def toggle_estop(self):
@@ -532,39 +529,27 @@ class Window(QMainWindow):
         self.update_dros()
 
     def zero(self, axis):
-        if axis == 'X':
-            try:
-                if self.backend is not None:
-                    state = self.backend.require_ready(homed=True)
-                    if not state['stationary']:
-                        raise RuntimeError('Stop motion before setting operator X0')
-                    self.operator_x_zero = state['machine']['X'] - self.backend.stat.tool_offset[0]
-                elif not self.estop:
-                    self.operator_x_zero = self.machine['X']
-                else:
-                    return
-                self.update_operator_marker()
-                self.refresh_machine() if self.backend is not None else self.update_dros()
-            except (RuntimeError, ValueError) as exc:
-                QMessageBox.warning(self, 'Operator X zero', str(exc))
+        if axis != 'Z':
+            return
+        try:
+            if self.loaded_profile:
+                target = self.scan_reference_x()
+                current = self.backend.snapshot()['work']['X'] if self.backend else self.machine['X'] - self.offset['X']
+                if abs(current - target) > .01:
+                    raise ValueError('Move to the loaded scan start X before touching off Z0')
+        except (RuntimeError, ValueError) as exc:
+            QMessageBox.warning(self, 'Z surface reference', str(exc))
             return
         if self.backend is not None:
-            action = lambda: self.backend.zero(axis)
-            if not self.control_action(action):
-                QMessageBox.warning(self, "Work zero", self.control_error)
+            if not self.control_action(lambda: self.backend.zero('Z')):
+                QMessageBox.warning(self, 'Work zero', self.control_error)
             elif self.native_widget is not None:
-                try:
-                    self.native_widget.refresh_work_coordinates()
-                except Exception as exc:
-                    QMessageBox.warning(self, "Preview", f"Work zero set, but preview refresh failed: {exc}")
+                self.native_widget.refresh_work_coordinates()
             return
-        if self.estop: return
-        self.offset[axis] = self.machine[axis] + (self.known_radius.value() if axis == "X" else 0)
+        if self.estop:
+            return
+        self.offset['Z'] = self.machine['Z']
         self.update_dros()
-
-    def update_operator_marker(self):
-        if self.native_widget is not None and hasattr(self.native_widget, 'set_operator_x_zero'):
-            self.native_widget.set_operator_x_zero(self.operator_x_zero)
 
     def calibrate_center(self):
         if self.backend is not None:
@@ -577,11 +562,9 @@ class Window(QMainWindow):
             if self.estop:
                 return
             self.offset['X'] = self.machine['X'] + self.known_radius.value()
-        self.zero('X')
+        self.refresh_machine() if self.backend is not None else self.update_dros()
 
     def home_machine(self):
-        self.operator_x_zero = None
-        self.update_operator_marker()
         if self.backend is not None:
             self.control_action(self.backend.home_all)
             return
@@ -589,13 +572,26 @@ class Window(QMainWindow):
         self.machine.update(X=0.0, Z=0.0, Y=0.0)
         self.update_dros()
 
-    def go_work_home(self):
-        if self.backend is not None:
-            return
-        if self.estop: return
-        self.machine["Z"] = self.offset["Z"] + self.safe_z.value()
-        self.machine["X"] = self.offset["X"]
-        self.update_dros()
+    def scan_reference_x(self):
+        if not self.loaded_profile or any(p.x_reference != 'spindle_center' for p in self.loaded_profile):
+            raise ValueError('Load a spindle-center CSV first')
+        return self.loaded_profile[0].work_x_mm + self.tool_x.value() - self.sensor_x.value()
+
+    def go_scan_start(self):
+        try:
+            x = self.scan_reference_x()
+            if self.backend is not None:
+                if QMessageBox.question(self, 'Move to scan reference',
+                    f'Move X to radius {-x:.3f} mm?\nRaise the tool clear of the rim first. Z will stay where it is.',
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                    return
+                if not self.control_action(lambda: self.backend.move_to_scan_x(x, self.jog_speed.value())):
+                    raise RuntimeError(self.control_error)
+            elif not self.estop:
+                self.machine['X'] = self.offset['X'] + x
+                self.update_dros()
+        except (RuntimeError, ValueError) as exc:
+            QMessageBox.warning(self, 'Scan reference', str(exc))
 
     def jog_pressed(self, axis, sign):
         if self.playback is not None:
@@ -703,19 +699,21 @@ class Window(QMainWindow):
             for axis, field in self.axis_feed_labels.items():
                 feed = state.get('axis_feed', {}).get(axis)
                 field.setText(f'{feed:.1f}' if feed is not None else '—')
-            self.center_x_label.setText(f"Center X: {state['work']['X']:+.4f} mm")
+            self.center_x_label.setText(f"G-code X: {state['work']['X']:+.4f} mm")
             self.machine = state["machine"]
             self.offset = {a: state["machine"][a] - state["work"][a] for a in ("X", "Y", "Z")}
             for axis, (machine, work) in self.dros.items():
                 machine.setText(f"{state['machine'][axis]:+.4f}")
                 work.setText(f"{state['work'][axis]:+.4f}")
-                if axis == 'X' and self.operator_x_zero is not None:
-                    work.setText(f"{state['machine']['X'] - self.backend.stat.tool_offset[0] - self.operator_x_zero:+.4f}")
+                if axis == 'X':
+                    work.setText(f"{-state['work']['X']:.4f}")
             label = ("ESTOP — reset required" if state["estop"] else
                      "Machine ON" if state["on"] else "Machine OFF")
             label += " | Homed" if state["homed"] else " | Not homed"
             if state["homing"]:
                 label += " | Homing"
+            if state.get('positioning'):
+                label += ' | Moving to scan start X'
             if not state["healthy"]:
                 label += " | Mesa communication fault"
             if self.control_error:
@@ -755,13 +753,15 @@ class Window(QMainWindow):
             self.was_running = state["running"]
             self.run_button.setEnabled(ready and state["homed"] and state["stationary"] and self.playback is None
                                        and not self.backend.limits_pending)
-            self.simulate_button.setEnabled(not state["running"] and self.playback is None)
+            self.simulate_button.setEnabled(not state["running"] and not state.get("positioning", False) and self.playback is None)
             ready = ready and self.playback is None
-            for axis, button in zip(('X', 'Z'), self.zero_buttons):
+            for axis, button in zip(('Z',), self.zero_buttons):
                 button.setEnabled(ready and state['stationary'])
-                hint = ("Set operator X display to zero here; spindle-center G54 stays unchanged" if axis == 'X'
-                        else "Set Work Z0 at the first scan surface reference")
+                hint = "Touch the rim at the loaded scan start X, then set Z0"
                 button.setToolTip(hint if state['can_touch_off'] else "Press Home All first and wait for Homed")
+            self.scan_start_button.setEnabled(ready and state['stationary'] and state['homed'] and bool(self.loaded_profile))
+            if state.get('positioning_error'):
+                self.statusBar().showMessage(state['positioning_error'])
             self.home_button.setEnabled(ready and state["stationary"])
             self.center_calibration_button.setEnabled(ready and state['stationary'] and state['can_touch_off'])
         except Exception as exc:
@@ -776,9 +776,10 @@ class Window(QMainWindow):
                 work.setText("UNKNOWN")
             for field in self.axis_feed_labels.values():
                 field.setText('—')
-            self.center_x_label.setText('Center X: — mm')
+            self.center_x_label.setText('G-code X: — mm')
             self.actual_rpm_label.setText('Spindle actual: — RPM')
             self.center_calibration_button.setEnabled(False)
+            self.scan_start_button.setEnabled(False)
             for button in self.zero_buttons + [self.home_button]:
                 button.setEnabled(False)
             try:
@@ -814,7 +815,7 @@ class Window(QMainWindow):
 
     def scan(self):
         try:
-            self.raw = simulated_scan_range(self.scan_start_x.value(), self.scan_end_x.value(),
+            self.raw = simulated_scan_range(-self.scan_start_x.value(), -self.scan_end_x.value(),
                                             self.scan_step.value(), centered_x=True)
             self.filtered = []
             self.scan_plot.raw, self.scan_plot.filtered = self.raw, []
@@ -835,9 +836,9 @@ class Window(QMainWindow):
             self.refresh_machine()
             if self.live_state is None:
                 return
-            target.setValue(self.live_state["work"]["X"])
+            target.setValue(-self.live_state["work"]["X"])
             return
-        target.setValue(self.machine["X"] - self.offset["X"])
+        target.setValue(self.offset["X"] - self.machine["X"])
 
     def filter_scan(self):
         try:
@@ -977,6 +978,8 @@ class Window(QMainWindow):
             reference = self.loaded_profile[0].x_reference
             self.loaded_path.setText(f"Loaded: {path} ({len(self.loaded_profile)} points; X reference: {reference})")
             self.code.clear()
+            if self.backend is None:
+                self.scan_start_button.setEnabled(True)
         except (ValueError, OSError) as exc:
             self.loaded_profile = []
             QMessageBox.warning(self, "Profile", str(exc))

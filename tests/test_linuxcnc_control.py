@@ -48,12 +48,46 @@ def make_backend():
 
 
 class ControlTests(unittest.TestCase):
+    def test_scan_start_move_changes_only_x_and_finishes_asynchronously(self):
+        b, s, c = make_backend()
+        s.homed = (1, 0, 1)
+        s.tool_offset = (0, 0, 0)
+        s.g5x_offset = (250., 0, 0)
+        s.g92_offset = (0., 0, 0)
+        b.x_center_reference = b.center_signature()
+        b.move_to_scan_x(-180, 30)
+        self.assertIn(('mdi', ('G21 G90 G54 G94 G1 X-180.000000 F30.000000',)), c.calls)
+        self.assertTrue(b.positioning)
+        self.assertFalse(b.snapshot()['ready'])
+        s.interp_state = 2
+        s.inpos = False
+        b.snapshot()
+        s.interp_state = 1
+        s.inpos = True
+        s.joint_actual_position = (70., 20., 30.)
+        b.snapshot()
+        self.assertFalse(b.positioning)
+        self.assertEqual(b.positioning_error, '')
+        self.assertEqual(c.calls[-1], ('mode', (b.api.MODE_MANUAL,)))
+        self.assertEqual(s.g5x_offset, (250., 0, 0))
+
+    def test_scan_start_move_blocks_unreferenced_or_out_of_limits_targets(self):
+        b, s, c = make_backend()
+        s.homed = (1, 0, 1)
+        s.tool_offset = (0, 0, 0)
+        with self.assertRaises(RuntimeError):
+            b.move_to_scan_x(-20, 30)
+        b.x_center_reference = b.center_signature()
+        with self.assertRaises(ValueError):
+            b.move_to_scan_x(-200, 30)
+        self.assertEqual(c.calls, [])
+
     def test_xz_homing_does_not_require_manual_table_homing(self):
         b, s, c = make_backend()
         s.homed = (1, 0, 1)
         self.assertTrue(b.snapshot()["homed"])
-        b.zero("X")
-        self.assertIn(("mdi", ("G21 G10 L20 P0 X0",)), c.calls)
+        b.zero("Z")
+        self.assertIn(("mdi", ("G21 G10 L20 P0 Z0",)), c.calls)
 
     def test_table_lock_stops_table_and_blocks_restart_but_not_x(self):
         b, s, c = make_backend()
@@ -126,11 +160,11 @@ class ControlTests(unittest.TestCase):
     def test_zero_requires_homing_and_restores_manual_mode(self):
         b, s, c = make_backend()
         with self.assertRaises(RuntimeError):
-            b.zero("X")
+            b.zero("Z")
         self.assertEqual(c.calls, [])
         s.homed = (1, 1, 1)
-        b.zero("X")
-        self.assertIn(("mdi", ("G21 G10 L20 P0 X0",)), c.calls)
+        b.zero("Z")
+        self.assertIn(("mdi", ("G21 G10 L20 P0 Z0",)), c.calls)
         self.assertEqual(c.calls[-2:], [("mode", (1,)), ("wait_complete", (1.,))])
 
     def test_work_zero_always_requires_homing(self):
@@ -156,7 +190,7 @@ class ControlTests(unittest.TestCase):
         b, s, c = make_backend()
         s.homed = (1, 1, 1)
         s.inpos = False
-        for action in (b.home_all, lambda: b.zero("X")):
+        for action in (b.home_all, lambda: b.zero("Z")):
             with self.assertRaises(RuntimeError):
                 action()
         self.assertEqual(c.calls, [])
@@ -203,8 +237,9 @@ class ProgramTests(unittest.TestCase):
         self.assertIn(('mdi', ('G21 G49 G10 L20 P0 X-25.000000',)), self.c.calls)
         self.assertEqual(self.b.x_center_reference, self.b.center_signature())
         self.assertFalse(any(name in ('home', 'auto', 'jog') for name, _ in self.c.calls))
-        self.b.zero('X')
-        self.assertIsNone(self.b.x_center_reference)
+        with self.assertRaises(ValueError):
+            self.b.zero('X')
+        self.assertEqual(self.b.x_center_reference, self.b.center_signature())
 
     def test_css_run_requires_center_and_real_feedback_and_checks_offset_changes(self):
         self.path.write_text(self.code.replace('G1 Z0.01', 'G96 D1200 S150\nG95 F0.05\nG1 Z0.01').replace('X10', 'X-10'))

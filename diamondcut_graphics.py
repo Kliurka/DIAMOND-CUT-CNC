@@ -21,7 +21,6 @@ class DiamondCutGraphics(GCodeGraphics):
         self.show_overlay = False
         self.show_live_plot = False
         self.simulated_work_position = None
-        self.operator_x_zero = None
         self.use_gradient_background = False
         self.setBackgroundColor(QColor(24, 27, 32))
 
@@ -89,17 +88,6 @@ class DiamondCutGraphics(GCodeGraphics):
                 g5x[1] + sin(angle) * g92[0] + cos(angle) * g92[1],
                 g5x[2] + g92[2])
 
-    def set_operator_x_zero(self, machine_x):
-        self.operator_x_zero = machine_x
-        self.updateGL()
-
-    def operator_origin(self):
-        origin = self.work_origin()
-        if self.operator_x_zero is None:
-            return origin
-        units = (self.stat.linear_units or 1) * 25.4
-        return (self.operator_x_zero / units, origin[1], origin[2])
-
     def set_view_y(self):
         # +90 about X projects +X right and +Z down (home left/top).
         self.reset()
@@ -147,7 +135,7 @@ class DiamondCutGraphics(GCodeGraphics):
         super().paintGL()
         self.stat.poll()
         origin, tip = self.work_origin(), self.tool_tip()
-        self.draw_screen_markers(self.project_xz(self.operator_origin(), matrix),
+        self.draw_screen_markers(self.project_xz(origin, matrix),
                                  self.project_xz(tip, matrix), self.project_xz(origin, matrix))
         units = (self.stat.linear_units or 1) * 25.4
         dx, dy, dz = (a - b for a, b in zip(tip, origin))

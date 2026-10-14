@@ -53,12 +53,9 @@ class GraphicsTests(unittest.TestCase):
     def tearDown(self):
         self.widget.close()
 
-    def test_operator_marker_keeps_center_reference_and_stays_when_z_lifts(self):
-        self.widget.operator_x_zero = 12.7
-        self.assertEqual(self.widget.operator_origin(), (.5, 0, 2))
+    def test_center_origin_stays_fixed_when_tool_lifts(self):
         self.assertEqual(self.widget.work_origin(), (1, 0, 2))
         self.widget.stat.actual_position = (12.7, 0, 25.4)
-        self.assertEqual(self.widget.operator_origin(), (.5, 0, 2))
         self.assertEqual(self.widget.work_origin(), (1, 0, 2))
 
     def test_native_pick_emits_local_line_signal_but_external_update_does_not(self):

@@ -33,21 +33,29 @@ class Preview(QWidget):
 
 
 class ExecutionUITests(unittest.TestCase):
-    def test_operator_zero_does_not_change_css_center_or_program_coordinates(self):
-        self.status.g5x_offset = (100., 2., 3.)
-        self.backend.x_center_reference = self.backend.center_signature()
-        signature = self.backend.center_signature()
+    def test_x_display_is_fixed_radius_and_has_no_zero_button(self):
+        self.status.g5x_offset = (250., 2., 3.)
+        self.status.g92_offset = (0., .2, .3)
+        self.window.refresh_machine()
+        self.assertEqual(self.window.dros['X'][1].text(), '240.0000')
+        self.assertEqual(len(self.window.zero_buttons), 1)
+        self.assertEqual(self.window.zero_buttons[0].accessibleName(), 'Zero Work Z')
         self.window.zero('X')
-        self.assertEqual(self.window.dros['X'][1].text(), '+0.0000')
-        self.assertEqual(self.backend.center_signature(), signature)
-        self.assertEqual(self.backend.x_center_reference, signature)
         self.assertEqual(self.commands.calls, [])
         self.window.capture_work_x(self.window.scan_start_x)
-        self.assertAlmostEqual(self.window.scan_start_x.value(), -90.1)
-        self.status.joint_actual_position = (15., 20., 25.)
+        self.assertEqual(self.window.scan_start_x.value(), 240)
+        self.status.joint_actual_position = (70., 20., 30.)
         self.window.refresh_machine()
-        self.assertEqual(self.window.dros['X'][1].text(), '+5.0000')
-        self.assertEqual(self.backend.center_signature(), signature)
+        self.assertEqual(self.window.dros['X'][1].text(), '180.0000')
+
+    def test_z_touch_off_requires_first_loaded_profile_x(self):
+        self.window.zero('Z')
+        self.assertTrue(self.warning.called)
+        self.assertFalse(any(name == 'mdi' for name, _ in self.commands.calls))
+        self.status.g5x_offset = (30., 2., 3.)
+        self.status.g92_offset = (0., .2, .3)
+        self.window.zero('Z')
+        self.assertIn(('mdi', ('G21 G10 L20 P0 Z0',)), self.commands.calls)
 
     def test_each_axis_feed_uses_its_own_joint_velocity(self):
         self.status.joint = ({'velocity': .5}, {'velocity': 20}, {'velocity': -1.25})
@@ -130,8 +138,8 @@ class ExecutionUITests(unittest.TestCase):
         self.assertEqual(self.commands.calls, [])
 
     def test_centered_css_ui_simulates_without_feedback_and_blocks_real_run(self):
-        self.window.scan_start_x.setValue(-100)
-        self.window.scan_end_x.setValue(-50)
+        self.window.scan_start_x.setValue(100)
+        self.window.scan_end_x.setValue(50)
         self.window.scan()
         self.window.loaded_profile = self.window.raw
         self.window.mode.setCurrentIndex(1)
