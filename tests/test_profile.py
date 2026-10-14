@@ -16,7 +16,9 @@ class ProfileTests(unittest.TestCase):
                         PassSpec(.3, 40, 700, 100, use_css=False, cut_direction='outer_to_center')])
         passes = code.split('(PASS ')[1:]
         self.assertIn('G0 X-100.0000\nG1 Z0.1000\nG1 X-80.0000 Z1.1000', passes[0])
-        self.assertIn('G0 X-80.0000\nG96 D1200 S120.000\nG95\nF0.0500\nG1 Z1.2000\nG1 X-100.0000 Z0.2000', passes[1])
+        self.assertNotIn('G0 X', passes[0][passes[0].index('G1 X-80.0000'):])
+        self.assertNotIn('G0 X', passes[1])
+        self.assertIn('G96 D1200 S120.000\nG95\nF0.0500\nG1 Z1.2000\nG1 X-100.0000 Z0.2000', passes[1])
         self.assertIn('G97 S700\nG94\nF40.0000', passes[2])
         moves = parse_program(code)
         self.assertTrue(moves.uses_css)

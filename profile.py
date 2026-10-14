@@ -212,6 +212,7 @@ def generate_gcode(
         f"G97 S{start_rpm(active[0]):.3f}" if css_mode(active[0]) else f"G97 S{active[0].rpm}",
         "M3",
     ]
+    current_x = None
     for number, setting in enumerate(active, 1):
         pass_xs, pass_zs = map(list, zip(*pass_points(setting)))
         css = css_mode(setting)
@@ -222,7 +223,8 @@ def generate_gcode(
         if not css:
             lines.append(f"F{setting.feed:.4f}")
         lines.append(f"G0 Z{clearance:.4f}")
-        lines.append(f"G0 X{pass_xs[0]:.4f}")
+        if current_x is None or f'{current_x:.4f}' != f'{pass_xs[0]:.4f}':
+            lines.append(f"G0 X{pass_xs[0]:.4f}")
         if css:
             lines += [f"G96 D{max_rpm} S{setting.surface_speed:.3f}", "G95", f"F{setting.feed:.4f}"]
         lines.append(f"G1 Z{pass_zs[0] + z_sign * depth:.4f}")
@@ -231,6 +233,10 @@ def generate_gcode(
         if css:
             lines += [f"G97 S{start_rpm(setting):.3f}", "G94"]
         lines.append(f"G0 Z{clearance:.4f}")
-        lines.append(f"G0 X{pass_xs[0]:.4f}")
+        current_x = pass_xs[-1]
+        # The next pass positions from this endpoint at Z clearance. Opposite
+        # directions share an endpoint and need no X return/reposition at all.
+        if number == len(active):
+            lines.append(f"G0 X{pass_xs[0]:.4f}")
     lines += ["M5", "G97 G94", "M2"]
     return "\n".join(lines) + "\n"
