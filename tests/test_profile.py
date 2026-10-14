@@ -6,6 +6,38 @@ from profile import PassSpec, Sample, generate_gcode, load_csv, save_csv, simula
 
 
 class ProfileTests(unittest.TestCase):
+    def test_centered_bidirectional_scan_csv_and_filter(self):
+        forward = simulated_scan_range(-250, -240, 2, centered_x=True)
+        reverse = simulated_scan_range(-240, -250, 2, centered_x=True)
+        self.assertEqual([p.work_x_mm for p in reverse], [-240, -242, -244, -246, -248, -250])
+        for a, b in zip(forward, reversed(reverse)):
+            self.assertAlmostEqual(a.z_mm, b.z_mm)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'centered.csv'
+            save_csv(path, smooth(reverse, 3, 3))
+            loaded = load_csv(path)
+            self.assertTrue(all(p.x_reference == 'spindle_center' for p in loaded))
+            self.assertEqual(loaded[0].work_x_mm, -240)
+            self.assertEqual(loaded[-1].work_x_mm, -250)
+        with self.assertRaises(ValueError):
+            simulated_scan_range(-10, 1, 1, centered_x=True)
+
+    def test_css_negative_center_coordinates_and_separate_cut_direction(self):
+        points = [Sample(0, 2, -100, 'spindle_center'), Sample(10, 2.5, -110, 'spindle_center')]
+        options = dict(passes=1, total_depth=.1, max_depth=.5, feed=.1, rpm=500,
+                       surface_speed=150, max_rpm=1200, safe_z=5, use_css=True)
+        code = generate_gcode(points, cut_direction='outer_to_center', **options)
+        self.assertIn('G0 X-110.0000', code)
+        self.assertIn('G1 X-100.0000 Z0.1000', code)
+        self.assertIn('G96 D1200 S150.000', code)
+        self.assertIn('G95\nF0.1000', code)
+        self.assertLess(code.index('G0 X-110.0000'), code.index('G96'))
+        reverse_code = generate_gcode(points, cut_direction='center_to_outer', **options)
+        self.assertIn('G0 X-100.0000', reverse_code)
+        self.assertIn('G1 X-110.0000 Z0.6000', reverse_code)
+        with self.assertRaises(ValueError):
+            generate_gcode(points, tool_x_offset=120, **options)
+
     def test_work_x_clearance_is_above_whole_profile_and_depth_points_down(self):
         points = [Sample(0, 2, 10), Sample(5, -1, 15), Sample(10, 3, 20)]
         code = generate_gcode(points, passes=2, total_depth=.2, max_depth=.5,
@@ -60,8 +92,8 @@ class ProfileTests(unittest.TestCase):
     def test_scan_range_starts_at_selected_work_x_but_csv_is_relative(self):
         points = simulated_scan_range(12, 22, 2, 20)
         self.assertEqual([p.edge_mm for p in points], [0, 2, 4, 6, 8, 10])
-        with self.assertRaises(ValueError):
-            simulated_scan_range(22, 12, 2, 20)
+        reverse = simulated_scan_range(22, 12, 2, 20)
+        self.assertEqual([p.work_x_mm for p in reverse], [22, 20, 18, 16, 14, 12])
         with self.assertRaises(ValueError):
             simulated_scan_range(12, 42, 2, 20)
 

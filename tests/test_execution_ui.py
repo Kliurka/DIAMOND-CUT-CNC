@@ -22,6 +22,9 @@ class Preview(QWidget):
     def set_simulated_work_position(self, position):
         self.position = position
 
+    def refresh_work_coordinates(self):
+        pass
+
     def reset_default_view(self):
         pass
 
@@ -37,16 +40,50 @@ class ExecutionUITests(unittest.TestCase):
     def setUp(self):
         self.backend, self.status, self.commands = make_backend()
         self.status.homed = (1, 0, 1)
+        self.status.tool_offset = (0, 0, 0)
+        self.backend.x_center_reference = self.backend.center_signature()
         self.settings_folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.settings_folder.cleanup)
         self.settings = QSettings(str(Path(self.settings_folder.name) / 'prefs.ini'), QSettings.IniFormat)
         self.window = Window(Preview, self.backend, self.settings)
         self.window.machine_timer.stop()
-        self.window.loaded_profile = [Sample(0, 1, 0), Sample(10, 1.1, 10)]
+        self.window.loaded_profile = [Sample(0, 1, -20, 'spindle_center'), Sample(10, 1.1, -10, 'spindle_center')]
         self.warning = patch('sim_app.QMessageBox.warning').start()
         self.addCleanup(patch.stopall)
         self.addCleanup(self.window.close)
         self.addCleanup(self.window.shutdown)
+
+    def test_old_edge_zero_csv_is_rejected_by_screen_generator(self):
+        self.window.loaded_profile = [Sample(0, 1, 0), Sample(10, 1.1, 10)]
+        self.assertFalse(self.window.generate())
+        self.assertTrue(self.warning.called)
+        self.assertEqual(self.commands.calls, [])
+
+    def test_centered_css_ui_simulates_without_feedback_and_blocks_real_run(self):
+        self.window.scan_start_x.setValue(-100)
+        self.window.scan_end_x.setValue(-50)
+        self.window.scan()
+        self.window.loaded_profile = self.window.raw
+        self.window.mode.setCurrentIndex(1)
+        self.assertEqual(self.window.feed.value(), .1)
+        self.assertEqual(self.window.feed_label.text(), 'Feed (mm/rev)')
+        self.assertTrue(self.window.generate())
+        self.assertIn('G96 D1200', self.window.code.toPlainText())
+        self.assertIn('G95', self.window.code.toPlainText())
+        self.window.simulate_gcode()
+        self.assertIsNotNone(self.window.playback)
+        self.assertEqual(self.commands.calls, [])
+        self.window.stop_simulation()
+        self.window.run_gcode()
+        self.assertFalse(self.backend.program_running)
+        self.assertFalse(any(name == 'auto' for name, _ in self.commands.calls))
+
+    def test_radius_button_changes_work_reference_but_not_homing(self):
+        self.window.known_radius.setValue(25)
+        self.window.zero_buttons[0].click()
+        self.assertIn(('mdi', ('G21 G49 G10 L20 P0 X-25.000000',)), self.commands.calls)
+        self.assertEqual(self.window.zero_buttons[0].text(), 'R')
+        self.assertFalse(any(name == 'home' for name, _ in self.commands.calls))
 
     def test_open_saved_gcode_simulates_and_runs_without_regenerating(self):
         from test_linuxcnc_control import ProgramTests

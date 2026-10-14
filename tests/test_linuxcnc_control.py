@@ -187,6 +187,48 @@ class ProgramTests(unittest.TestCase):
         self.b, self.s, self.c = make_backend()
         self.s.homed = (1, 0, 1)
 
+    def test_g95_velocity_limit_blocks_before_auto(self):
+        self.path.write_text(self.code.replace('G1 Z0.01', 'G96 D1200 S150\nG95 F1\nG1 Z0.01').replace('X10', 'X-10'))
+        self.s.tool_offset = (0, 0, 0)
+        self.b.x_center_reference = self.b.center_signature()
+        self.b.spindle_feedback = lambda: True
+        self.b.rpm_feedback_verified = True
+        with self.assertRaisesRegex(RuntimeError, 'G95 feed exceeds'):
+            self.b.run_program(self.path)
+        self.assertEqual(self.c.calls, [])
+
+    def test_radius_touch_off_sets_center_without_home_motion(self):
+        self.s.tool_offset = (0, 0, 0)
+        self.b.touch_off_x_radius(25)
+        self.assertIn(('mdi', ('G21 G49 G10 L20 P0 X-25.000000',)), self.c.calls)
+        self.assertEqual(self.b.x_center_reference, self.b.center_signature())
+        self.assertFalse(any(name in ('home', 'auto', 'jog') for name, _ in self.c.calls))
+        self.b.zero('X')
+        self.assertIsNone(self.b.x_center_reference)
+
+    def test_css_run_requires_center_and_real_feedback_and_checks_offset_changes(self):
+        self.path.write_text(self.code.replace('G1 Z0.01', 'G96 D1200 S150\nG95 F0.05\nG1 Z0.01').replace('X10', 'X-10'))
+        self.s.tool_offset = (0, 0, 0)
+        with self.assertRaisesRegex(RuntimeError, 'known radius'):
+            self.b.run_program(self.path)
+        self.assertEqual(self.c.calls, [])
+        self.b.x_center_reference = self.b.center_signature()
+        with self.assertRaisesRegex(RuntimeError, 'RPM feedback'):
+            self.b.run_program(self.path)
+        self.assertEqual(self.c.calls, [])
+        self.b.rpm_feedback_verified = True
+        self.b.spindle_feedback = lambda: True
+        self.b.run_program(self.path)
+        self.assertTrue(self.b.program_running)
+        self.b.spindle_feedback = lambda: False
+        self.b.snapshot()
+        self.assertFalse(self.b.program_running)
+        self.assertIn(('spindle', (0,)), self.c.calls)
+        self.b.spindle_feedback = lambda: True
+        self.s.g5x_offset = (2, 2, 3)
+        with self.assertRaisesRegex(RuntimeError, 'known radius'):
+            self.b.run_program(self.path)
+
     def test_run_opens_full_program_then_starts_line_zero(self):
         self.b.run_program(self.path)
         self.assertEqual(self.c.calls, [('mode', (2,)), ('wait_complete', (1,)),

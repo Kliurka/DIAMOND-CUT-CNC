@@ -28,7 +28,9 @@ class HandlerClass:
         if real:
             from linuxcnc_control import LinuxCNCControl
             backend = LinuxCNCControl(linuxcnc, ini, lambda: read_snapshot(hal.get_value)["healthy"],
-                                      ini_path=os.environ["INI_FILE_NAME"])
+                                      ini_path=os.environ["INI_FILE_NAME"],
+                                      spindle_feedback=lambda: hal.pin_has_writer('spindle.0.speed-in'),
+                                      spindle_rpm=lambda: float(hal.get_value('spindle.0.speed-in')) * 60)
             self.hal.newpin("table-lock", hal.HAL_BIT, hal.HAL_IN)
             self.hal["table-lock"] = False
         self.panel = Window(native_preview_factory=self.make_graphics, machine_backend=backend)

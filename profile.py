@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+from bisect import bisect_right
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ class Sample:
     edge_mm: float
     z_mm: float
     work_x_mm: float | None = None
+    x_reference: str = "work"
 
 
 @dataclass(frozen=True)
@@ -40,16 +42,26 @@ def simulated_scan(radius_mm: float, step_mm: float) -> list[Sample]:
 
 
 def simulated_scan_range(start_x: float, end_x: float, step_mm: float,
-                         radius_at_start: float | None = None) -> list[Sample]:
-    """The machine moves toward center (+X); CSV edge positions remain relative to start."""
-    span = end_x - start_x
+                         radius_at_start: float | None = None, *, centered_x: bool = False) -> list[Sample]:
+    """Travel distance rises from scan start, with either sign of work-X travel."""
+    span = abs(end_x - start_x)
+    direction = 1 if end_x > start_x else -1
     if not all(math.isfinite(v) for v in (start_x, end_x, step_mm)):
         raise ValueError("Scan positions must be finite")
     if span <= 0:
-        raise ValueError("End X must exceed start X")
+        raise ValueError("Scan start and end must differ")
     if radius_at_start is not None and (not math.isfinite(radius_at_start) or span > radius_at_start):
         raise ValueError("Scan distance exceeds legacy rim radius")
-    return [Sample(s.edge_mm, s.z_mm, start_x + s.edge_mm) for s in simulated_scan(span, step_mm)]
+    if centered_x and (start_x > 0 or end_x > 0):
+        raise ValueError("Centered-X scan coordinates must be <= 0; +X moves toward the center")
+    raw = simulated_scan(span, step_mm)
+    edges = [p.edge_mm for p in raw]
+    def z_at(edge):
+        index = min(max(bisect_right(edges, edge) - 1, 0), len(raw) - 2)
+        left, right = raw[index:index + 2]
+        return left.z_mm + (right.z_mm - left.z_mm) * (edge - left.edge_mm) / (right.edge_mm - left.edge_mm)
+    return [Sample(s.edge_mm, z_at(s.edge_mm if direction > 0 else span - s.edge_mm),
+                   start_x + direction * s.edge_mm, "spindle_center" if centered_x else "work") for s in raw]
 
 
 def smooth(samples: list[Sample], window: int = 5, average_window: int = 1) -> list[Sample]:
@@ -59,7 +71,7 @@ def smooth(samples: list[Sample], window: int = 5, average_window: int = 1) -> l
         raise ValueError("No scan samples")
     half = window // 2
     filtered = [
-        Sample(s.edge_mm, median(p.z_mm for p in samples[max(0, i-half):min(len(samples), i+half+1)]), s.work_x_mm)
+        Sample(s.edge_mm, median(p.z_mm for p in samples[max(0, i-half):min(len(samples), i+half+1)]), s.work_x_mm, s.x_reference)
         for i, s in enumerate(samples)
     ]
     if average_window == 1:
@@ -67,7 +79,7 @@ def smooth(samples: list[Sample], window: int = 5, average_window: int = 1) -> l
     half = average_window // 2
     return [
         Sample(s.edge_mm, sum(p.z_mm for p in filtered[max(0, i-half):min(len(filtered), i+half+1)])
-               / len(filtered[max(0, i-half):min(len(filtered), i+half+1)]), s.work_x_mm)
+               / len(filtered[max(0, i-half):min(len(filtered), i+half+1)]), s.work_x_mm, s.x_reference)
         for i, s in enumerate(filtered)
     ]
 
@@ -76,30 +88,42 @@ def save_csv(path: str | Path, samples: list[Sample]) -> None:
     with open(path, "w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
         with_work = bool(samples) and all(s.work_x_mm is not None for s in samples)
-        writer.writerow(["edge_mm", "z_mm", "work_x_mm"] if with_work else ["edge_mm", "z_mm"])
+        with_reference = with_work and any(s.x_reference != "work" for s in samples)
+        writer.writerow((["edge_mm", "z_mm", "work_x_mm"] + (["x_reference"] if with_reference else []))
+                        if with_work else ["edge_mm", "z_mm"])
         for s in samples:
             row = [f"{s.edge_mm:.4f}", f"{s.z_mm:.4f}"]
             if with_work:
                 row.append(f"{s.work_x_mm:.4f}")
+            if with_reference:
+                row.append(s.x_reference)
             writer.writerow(row)
 
 
 def load_csv(path: str | Path) -> list[Sample]:
     with open(path, newline="", encoding="utf-8-sig") as stream:
         reader = csv.DictReader(stream)
-        if reader.fieldnames not in (["edge_mm", "z_mm"], ["edge_mm", "z_mm", "work_x_mm"]):
+        if reader.fieldnames not in (["edge_mm", "z_mm"], ["edge_mm", "z_mm", "work_x_mm"],
+                                     ["edge_mm", "z_mm", "work_x_mm", "x_reference"]):
             raise ValueError("Expected CSV columns: edge_mm,z_mm[,work_x_mm]")
         samples = [Sample(float(row["edge_mm"]), float(row["z_mm"]),
-                          float(row["work_x_mm"]) if "work_x_mm" in row else None) for row in reader]
+                          float(row["work_x_mm"]) if "work_x_mm" in row else None,
+                          row.get("x_reference", "work")) for row in reader]
     if len(samples) < 2 or not all(math.isfinite(s.edge_mm) and math.isfinite(s.z_mm) for s in samples):
         raise ValueError("Profile needs at least two finite samples")
     if samples[0].edge_mm < 0 or any(a.edge_mm >= b.edge_mm for a, b in zip(samples, samples[1:])):
         raise ValueError("edge_mm must rise strictly from the rim edge")
     if samples[0].work_x_mm is not None:
-        start = samples[0].work_x_mm - samples[0].edge_mm
-        if any(not math.isfinite(s.work_x_mm) or
-               not math.isclose(s.work_x_mm - s.edge_mm, start, abs_tol=0.0002) for s in samples):
-            raise ValueError("Work X coordinates must match the scan travel")
+        if any(s.work_x_mm is None or not math.isfinite(s.work_x_mm) for s in samples):
+            raise ValueError("Invalid work X coordinates")
+        direction = 1 if samples[-1].work_x_mm > samples[0].work_x_mm else -1
+        start = samples[0].work_x_mm - direction * samples[0].edge_mm
+        if any(not math.isclose(s.work_x_mm - direction * s.edge_mm, start, abs_tol=0.0002) for s in samples):
+            raise ValueError("Work X coordinates must match scan travel")
+        if len({s.x_reference for s in samples}) != 1 or samples[0].x_reference not in ('work', 'spindle_center'):
+            raise ValueError("Invalid X reference in CSV")
+        if samples[0].x_reference == 'spindle_center' and any(s.work_x_mm > 0 for s in samples):
+            raise ValueError("Centered X coordinates must be <= 0")
     return samples
 
 
@@ -111,6 +135,7 @@ def generate_gcode(
     tool_x_offset: float = 0.0, tool_z_offset: float = 0.0,
     use_css: bool = False,
     pass_specs: list[PassSpec] | None = None,
+    cut_direction: str = "scan",
 ) -> str:
     if not samples or passes < 1 or feed <= 0 or rpm <= 0 or max_rpm <= 0:
         raise ValueError("Missing profile or invalid machining parameter")
@@ -132,11 +157,14 @@ def generate_gcode(
     if rim_radius is None:
         if any(s.work_x_mm is None or not math.isfinite(s.work_x_mm) for s in samples):
             raise ValueError("Profile needs saved work X coordinates")
-        if use_css:
-            raise ValueError("G96 requires a verified spindle-center X reference; use G97 for work-X profiles")
+        if use_css and any(s.x_reference != 'spindle_center' for s in samples):
+            raise ValueError("CSS needs a new CSV marked spindle_center; old edge-zero files must be rescanned")
         xs = [s.work_x_mm + tool_x_offset - sensor_x_offset for s in samples]
-        if any(a >= b for a, b in zip(xs, xs[1:])):
-            raise ValueError("Work X must increase in scan order")
+        diffs = [b - a for a, b in zip(xs, xs[1:])]
+        if not diffs or not (all(d > 0 for d in diffs) or all(d < 0 for d in diffs)):
+            raise ValueError("Work X must be strictly monotonic")
+        if (use_css or all(s.x_reference == "spindle_center" for s in samples)) and any(x > 0 for x in xs):
+            raise ValueError("CSS tool path cannot cross the spindle center")
     else:
         if not math.isfinite(rim_radius) or rim_radius <= 0:
             raise ValueError("Invalid legacy rim radius")
@@ -152,25 +180,42 @@ def generate_gcode(
     clearance = min(zprofile) - safe_z if z_sign == 1 else max(zprofile) + safe_z
     if not all(math.isfinite(z) for z in zprofile) or not math.isfinite(clearance):
         raise ValueError("Invalid safe Z")
+    if cut_direction not in ('scan', 'outer_to_center', 'center_to_outer'):
+        raise ValueError("Invalid cutting direction")
+    if rim_radius is None and cut_direction != 'scan':
+        points = sorted(zip(xs, zprofile), reverse=cut_direction == 'center_to_outer')
+        xs, zprofile = map(list, zip(*points))
+    def start_rpm(setting):
+        if not use_css:
+            return setting.rpm
+        radius = abs(xs[0])
+        return min(max_rpm, setting.surface_speed * 1000 / (2 * math.pi * radius)) if radius else max_rpm
     lines = [
-        "(SIMULATION PREVIEW - VERIFY COORDINATES AND CLEARANCES BEFORE MACHINE USE)",
+        "(PROFILE TOOLPATH - VERIFY COORDINATES AND CLEARANCES)",
+        "(X_REFERENCE spindle_center)" if samples[0].x_reference == 'spindle_center' else "(X_REFERENCE legacy)",
         "G21 G90 G40 G49 G54",
-        "G8",  # Radius X mode. Center is X0.
-        "G95" if use_css else "G94",
-        f"G96 D{max_rpm} S{active[0].surface_speed:.3f}" if use_css else f"G97 S{active[0].rpm}",
+        "G8",
+        "G94",
+        f"G97 S{start_rpm(active[0]):.3f}" if use_css else f"G97 S{active[0].rpm}",
         "M3",
     ]
     for number, setting in enumerate(active, 1):
         depth = setting.depth_mm
         lines.append(f"(PASS {number}/{len(active)}; depth {depth:.4f} mm)")
-        lines.append(f"G96 D{max_rpm} S{setting.surface_speed:.3f}" if use_css else f"G97 S{setting.rpm}")
-        lines.append(f"F{setting.feed:.4f}")
+        lines.append(f"G97 S{start_rpm(setting):.3f}" if use_css else f"G97 S{setting.rpm}")
+        if use_css:
+            lines.append("G94")
+        else:
+            lines.append(f"F{setting.feed:.4f}")
         lines.append(f"G0 Z{clearance:.4f}")
         lines.append(f"G0 X{xs[0]:.4f}")
+        if use_css:
+            lines += [f"G96 D{max_rpm} S{setting.surface_speed:.3f}", "G95", f"F{setting.feed:.4f}"]
         lines.append(f"G1 Z{zprofile[0] + z_sign * depth:.4f}")
         for x, z in zip(xs[1:], zprofile[1:]):
             lines.append(f"G1 X{x:.4f} Z{z + z_sign * depth:.4f}")
-        # Clear the entire profile before any rapid X return.
+        if use_css:
+            lines += [f"G97 S{start_rpm(setting):.3f}", "G94"]
         lines.append(f"G0 Z{clearance:.4f}")
         lines.append(f"G0 X{xs[0]:.4f}")
     lines += ["M5", "G97 G94", "M2"]

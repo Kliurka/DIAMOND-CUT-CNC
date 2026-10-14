@@ -10,7 +10,7 @@ AXES = "XYZ"
 
 
 class LinuxCNCControl:
-    def __init__(self, api, ini, healthy=lambda: True, ini_path=None):
+    def __init__(self, api, ini, healthy=lambda: True, ini_path=None, spindle_feedback=lambda: False, spindle_rpm=lambda: None):
         self.api = api
         self.ini = ini
         self.ini_path = Path(ini_path).resolve() if ini_path else None
@@ -18,6 +18,10 @@ class LinuxCNCControl:
         self.stat = api.stat()
         self.cmd = api.command()
         self.healthy = healthy
+        self.spindle_feedback = spindle_feedback
+        self.spindle_rpm = spindle_rpm
+        self.rpm_feedback_verified = False
+        self.x_center_reference = None
         kins = ini.find("KINS", "KINEMATICS") or ""
         coords = "".join((ini.find("TRAJ", "COORDINATES") or "").split()).upper()
         if kins.split()[0:1] != ["trivkins"] or coords != "XYZ":
@@ -38,6 +42,7 @@ class LinuxCNCControl:
         self.output_test_active = False
         self.output_test_stop = None
         self.program_running = False
+        self.program_requires_rpm = False
         self.program_seen_busy = False
         self.program_started = 0
 
@@ -48,7 +53,8 @@ class LinuxCNCControl:
         on = s.task_state == api.STATE_ON
         homing = any(j.get("homing", False) for j in s.joint[:3])
         if self.program_running:
-            if not healthy or not on:
+            if (not healthy or not on or (self.program_requires_rpm
+                    and (not self.rpm_feedback_verified or not self.spindle_feedback()))):
                 self.stop()
             elif s.interp_state != api.INTERP_IDLE:
                 self.program_seen_busy = True
@@ -183,6 +189,31 @@ class LinuxCNCControl:
         save_rapids(self.ini_path, speeds)
         self.limits_pending = True
 
+    def center_signature(self):
+        return (float(self.stat.g5x_offset[0]), float(self.stat.g92_offset[0]))
+
+    def check_spindle_modes(self, moves, centered=False):
+        if centered or getattr(moves, "uses_css", any(move.css for move in moves)):
+            if self.x_center_reference is None or self.center_signature() != self.x_center_reference:
+                raise RuntimeError('Set X at a known radius using R before centered-X Run (required each session)')
+            if any(move.css and (move.x > 0 or move.start_x > 0) for move in moves):
+                raise RuntimeError('Centered-X CSS toolpath must stay at X <= 0')
+            if abs(self.stat.tool_offset[0]) > 1e-6:
+                raise RuntimeError('Centered-X Run requires cancelled tool compensation; set radius with R again')
+        if any(move.feed_per_rev for move in moves):
+            if not self.rpm_feedback_verified or not self.spindle_feedback():
+                raise RuntimeError('G95 needs connected and verified real spindle RPM feedback')
+        for move in moves:
+            if not move.feed_per_rev or move.speed == 0:
+                continue
+            dx, dz = move.x - move.start_x, move.z - move.start_z
+            distance = math.hypot(dx, dz)
+            if not distance:
+                continue
+            for axis, component in [('X', dx), ('Z', dz)]:
+                if abs(component) / distance * move.max_speed / 60 > self.limits[axis] + 1e-6:
+                    raise RuntimeError(f'Line {move.line}: G95 feed exceeds {axis} velocity limit; reduce mm/rev or RPM')
+
     def run_program(self, path):
         if self.limits_pending:
             raise RuntimeError('Restart LinuxCNC to activate the saved machine settings')
@@ -192,7 +223,12 @@ class LinuxCNCControl:
         if getattr(self.stat, "g5x_index", 1) != 1 or self.stat.rotation_xy != 0:
             raise RuntimeError("Run requires G54 with zero XY rotation")
         path = Path(path).resolve()
-        moves = parse_program(path.read_text(), start=(state["work"]["X"], state["work"]["Z"]), require_preamble=True)
+        code = path.read_text()
+        centered = '(X_REFERENCE spindle_center)' in code
+        if self.x_center_reference is not None and ('(X_REFERENCE legacy)' in code or 'SIMULATION PREVIEW - VERIFY COORDINATES' in code):
+            raise RuntimeError('Regenerate old edge-zero G-code from a new spindle-centered scan')
+        moves = parse_program(code, start=(state["work"]["X"], state["work"]["Z"]), require_preamble=True)
+        self.check_spindle_modes(moves, centered=centered)
         for move in moves:
             for axis, value, index in (("X", move.x, 0), ("Z", move.z, 2)):
                 low = self.ini.find("AXIS_" + axis, "MIN_LIMIT")
@@ -217,6 +253,8 @@ class LinuxCNCControl:
                     or not self.stat.inpos or not (self.stat.homed[0] and self.stat.homed[2])
                     or self.output_test_active or self.stat.interp_state != self.api.INTERP_IDLE):
                 raise RuntimeError("Run conditions changed while loading")
+            self.check_spindle_modes(moves, centered=centered)
+            self.program_requires_rpm = any(move.feed_per_rev for move in moves)
             self.program_running = True
             self.program_seen_busy = False
             self.program_started = time.monotonic()
@@ -231,6 +269,7 @@ class LinuxCNCControl:
         if not self.require_ready()["stationary"]:
             raise RuntimeError("Stop motion before homing")
         self.stop_jog()
+        self.x_center_reference = None
         self.cmd.teleop_enable(0)
         if self.cmd.wait_complete(1.0) != self.api.RCS_DONE:
             raise RuntimeError("Joint mode switch did not complete")
@@ -241,7 +280,25 @@ class LinuxCNCControl:
         if self.table_locked and self.active_jog is not None and self.active_jog[1] == 1:
             self.stop_jog()
 
+    def touch_off_x_radius(self, radius):
+        if not math.isfinite(radius) or radius < 0:
+            raise ValueError('Known radius must be nonnegative')
+        self.stat.poll()
+        if getattr(self.stat, 'g5x_index', 1) != 1 or self.stat.rotation_xy != 0:
+            raise RuntimeError('Center touch-off requires G54 with zero XY rotation')
+        self.x_center_reference = None
+        self.set_work_position('X', -radius, cancel_tool=True)
+        self.stat.poll()
+        self.x_center_reference = self.center_signature()
+
     def zero(self, axis):
+        if axis == 'X':
+            self.x_center_reference = None
+        self.set_work_position(axis, 0)
+
+    def set_work_position(self, axis, value, cancel_tool=False):
+        if not math.isfinite(value):
+            raise ValueError('Invalid work position')
         if axis not in AXES:
             raise ValueError("Invalid axis")
         if not self.require_ready(homed=True)["stationary"]:
@@ -252,7 +309,10 @@ class LinuxCNCControl:
             if self.cmd.wait_complete(1.0) != self.api.RCS_DONE:
                 raise RuntimeError("MDI mode switch did not complete")
             # Explicit metric units; P0 selects the active work coordinate system.
-            self.cmd.mdi(f"G21 G10 L20 P0 {axis}0")
+            command = f"G21 {'G49 ' if cancel_tool else ''}G10 L20 P0 {axis}{value:.6f}"
+            if value == 0 and not cancel_tool:
+                command = f"G21 G10 L20 P0 {axis}0"
+            self.cmd.mdi(command)
             if self.cmd.wait_complete(1.0) != self.api.RCS_DONE:
                 self.cmd.abort()
                 raise RuntimeError("Work zero command did not complete")

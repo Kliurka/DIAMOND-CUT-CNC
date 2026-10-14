@@ -36,7 +36,7 @@ class Plot(QWidget):
         bounds = self.rect().adjusted(70, 36, -24, -56)
         painter.setPen(QColor("#8996a7"))
         painter.drawRect(bounds)
-        painter.drawText(bounds.left(), self.height() - 12, "Distance from outer edge toward center (X, mm)")
+        painter.drawText(bounds.left(), self.height() - 12, "Distance from scan start (mm)")
         if not self.raw:
             painter.drawText(bounds, Qt.AlignCenter, "Run simulated scan")
             return
@@ -150,10 +150,10 @@ class Window(QMainWindow):
             grid.addWidget(self.dros[axis][1], row, 2)
         self.zero_buttons = []
         for row, axis in enumerate(("X", "Z"), 1):
-            button = QPushButton("0")
+            button = QPushButton("R" if axis == "X" else "0")
             button.setFixedWidth(28)
             button.setToolTip(f"Zero Work {axis}")
-            button.setAccessibleName(f"Zero Work {axis}")
+            button.setAccessibleName("Set X at known radius" if axis == "X" else "Zero Work Z")
             button.clicked.connect(lambda _=False, a=axis: self.zero(a))
             grid.addWidget(button, row, 3)
             self.zero_buttons.append(button)
@@ -237,10 +237,10 @@ class Window(QMainWindow):
         tabs = QTabWidget()
         scan = QWidget()
         scan_layout = QVBoxLayout(scan)
-        scan_layout.addWidget(QLabel("<h2>Scan</h2>Synthetic laser data, outer edge toward center."))
+        scan_layout.addWidget(QLabel("<h2>Scan</h2>Synthetic laser data; Work X0 is the spindle center."))
         scan_range = QGridLayout()
-        self.scan_start_x = number(0, -1000, 1000, 3, " mm")
-        self.scan_end_x = number(230, -1000, 1000, 3, " mm")
+        self.scan_start_x = number(-250, -1000, 0, 3, " mm")
+        self.scan_end_x = number(-20, -1000, 0, 3, " mm")
         self.scan_step = number(1, 0.01, 20, 2, " mm")
         self.scan_speed = number(600, 1, 10000, 1, " mm/min")
         for col, (label, field) in zip((0, 3), (("X start (work)", self.scan_start_x),
@@ -307,16 +307,20 @@ class Window(QMainWindow):
         self.surface_speed = number(150, 0.1, 5000, 1, " m/min")
         self.mode = QComboBox()
         self.mode.addItems(["G97 / G94 (RPM, mm/min)", "G96 / G95 (CSS, mm/rev)"])
-        self.mode.model().item(1).setEnabled(False)
-        self.mode.setToolTip("CSS requires X referenced to spindle center. Work-X profiles currently use G97.")
-        self.mode.currentIndexChanged.connect(lambda index: self.feed.setValue(0.1 if index else 50))
+        self.mode.setToolTip("G96 uses Work X0 at spindle center; G95 uses real RPM feedback")
+        self.mode.currentIndexChanged.connect(self.change_cut_mode)
+        self.cut_direction = QComboBox()
+        self.cut_direction.addItems(["Outside → center (+X)", "Center → outside (−X)"])
         for index, (label, widget) in enumerate((
             ("Total depth", self.depth),
             ("Feed (mm/min)", self.feed), ("Starting RPM", self.rpm),
             ("Max RPM", self.max_rpm), ("Surface speed", self.surface_speed),
-            ("Mode", self.mode),
+            ("Mode", self.mode), ("Cut direction", self.cut_direction),
         )):
-            fields.addWidget(QLabel(label), index // 2, (index % 2) * 2)
+            field_label = QLabel(label)
+            if widget is self.feed:
+                self.feed_label = field_label
+            fields.addWidget(field_label, index // 2, (index % 2) * 2)
             fields.addWidget(widget, index // 2, (index % 2) * 2 + 1)
         turn_layout.addLayout(fields)
         pass_hint = QLabel("Pass depths from Work Z0 (+Z). Double-click cells to edit.")
@@ -392,7 +396,7 @@ class Window(QMainWindow):
         self.native_widget = None
         self.native_host.setMinimumHeight(200)
         turning_split.addWidget(self.native_host)
-        turning_split.setSizes([410, 290])
+        turning_split.setSizes([450, 250])
         turn_root.addWidget(turning_split, 1)
         self.init_native_preview()
         tabs.addTab(turning, "2. Toolpath & Turning")
@@ -404,6 +408,22 @@ class Window(QMainWindow):
         self.tool_z = number(0, -1000, 1000, 3, " mm")
         self.safe_z = number(5, 0.1, 100, 2, " mm")
         self.max_depth = number(0.5, 0.001, 10, 3, " mm")
+        self.known_radius = number(float(self.preferences.value('known_radius', 250)), 0, 1000, 3, " mm")
+        self.known_radius.valueChanged.connect(lambda value: self.preferences.setValue('known_radius', value))
+        form.addRow("Known tool-tip radius for X button R", self.known_radius)
+        radius_help = QLabel("Place the tool tip at this measured radius, then press R beside Work X. X becomes −radius; Home stays unchanged.")
+        radius_help.setWordWrap(True)
+        form.addRow(radius_help)
+        self.rpm_feedback_verified = QCheckBox("Real spindle RPM sensor connected and checked")
+        self.feedback_pref_key = 'rpm_feedback_verified/' + str(self.backend.ini_path if self.backend else 'preview')
+        self.rpm_feedback_verified.setChecked(self.preferences.value(self.feedback_pref_key, False, type=bool))
+        self.rpm_feedback_verified.toggled.connect(self.set_rpm_verified)
+        if self.backend is not None:
+            self.backend.rpm_feedback_verified = self.rpm_feedback_verified.isChecked()
+        form.addRow(self.rpm_feedback_verified)
+        self.rpm_status = QLabel("RPM feedback: not connected in preview")
+        self.rpm_status.setWordWrap(True)
+        form.addRow(self.rpm_status)
         self.rapid_speed = {axis: number(self.backend.limits[axis] * 60 if self.backend else 600,
                                          .1, 60000, 1, " mm/min") for axis in 'XZ'}
         for axis in 'XZ':
@@ -459,6 +479,7 @@ class Window(QMainWindow):
         settings_scroll.setWidgetResizable(True)
         settings_scroll.setWidget(settings)
         tabs.addTab(settings_scroll, "3. Settings")
+        self.change_cut_mode(self.mode.currentIndex(), reset_feed=False)
         return tabs
 
     def update_dros(self):
@@ -480,7 +501,8 @@ class Window(QMainWindow):
 
     def zero(self, axis):
         if self.backend is not None:
-            if not self.control_action(lambda: self.backend.zero(axis)):
+            action = (lambda: self.backend.touch_off_x_radius(self.known_radius.value())) if axis == 'X' else (lambda: self.backend.zero(axis))
+            if not self.control_action(action):
                 QMessageBox.warning(self, "Work zero", self.control_error)
             elif self.native_widget is not None:
                 try:
@@ -489,7 +511,7 @@ class Window(QMainWindow):
                     QMessageBox.warning(self, "Preview", f"Work zero set, but preview refresh failed: {exc}")
             return
         if self.estop: return
-        self.offset[axis] = self.machine[axis]
+        self.offset[axis] = self.machine[axis] + (self.known_radius.value() if axis == "X" else 0)
         self.update_dros()
 
     def home_machine(self):
@@ -627,6 +649,15 @@ class Window(QMainWindow):
                 label += "\n" + self.control_error
             self.estop_label.setText(label)
             self.power_button.setText("Machine OFF" if state["on"] else "Machine ON")
+            try:
+                rpm = self.backend.spindle_rpm()
+                connected = self.backend.spindle_feedback()
+                reference = 'set this session' if self.backend.x_center_reference == self.backend.center_signature() else 'press R after homing'
+                self.rpm_status.setText(f"Actual RPM: {rpm:.1f}" if rpm is not None and connected else "Actual RPM: feedback not connected")
+                self.rpm_status.setText(self.rpm_status.text() + f" | X center: {reference}")
+            except Exception:
+                self.rpm_status.setText("RPM feedback unavailable")
+            self.rpm_feedback_verified.setEnabled(not state['running'])
             ready = state["ready"]
             if self.held_jog is not None:
                 if not ready or self.backend.active_jog is None:
@@ -651,10 +682,11 @@ class Window(QMainWindow):
                                        and not self.backend.limits_pending)
             self.simulate_button.setEnabled(not state["running"] and self.playback is None)
             ready = ready and self.playback is None
-            for button in self.zero_buttons:
-                button.setEnabled(ready and state["stationary"])
-                button.setToolTip("Set current position to zero in the active work coordinate system"
-                                  if state["can_touch_off"] else "Press Home All first and wait for Homed")
+            for axis, button in zip(('X', 'Z'), self.zero_buttons):
+                button.setEnabled(ready and state['stationary'])
+                hint = (f"Set Work X to −{self.known_radius.value():.3f} mm at the measured tool-tip radius" if axis == 'X'
+                        else "Set Work Z0 at the first scan surface reference")
+                button.setToolTip(hint if state['can_touch_off'] else "Press Home All first and wait for Homed")
             self.home_button.setEnabled(ready and state["stationary"])
         except Exception as exc:
             self.live_state = None
@@ -700,14 +732,14 @@ class Window(QMainWindow):
     def scan(self):
         try:
             self.raw = simulated_scan_range(self.scan_start_x.value(), self.scan_end_x.value(),
-                                            self.scan_step.value())
+                                            self.scan_step.value(), centered_x=True)
             self.filtered = []
             self.scan_plot.raw, self.scan_plot.filtered = self.raw, []
             self.scan_plot.update()
             self.code.clear()
-            estimate_sec = 60 * (self.scan_end_x.value() - self.scan_start_x.value()) / self.scan_speed.value()
+            estimate_sec = 60 * abs(self.scan_end_x.value() - self.scan_start_x.value()) / self.scan_speed.value()
             self.scan_summary.setText(
-                f"Travel: {self.scan_end_x.value() - self.scan_start_x.value():.2f} mm  |  "
+                f"Travel: {abs(self.scan_end_x.value() - self.scan_start_x.value()):.2f} mm  |  "
                 f"Samples: {len(self.raw)}  |  Estimated machine travel: {estimate_sec:.1f} s")
             self.statusBar().showMessage(
                 f"Synthetic scan X {self.scan_start_x.value():.3f} → {self.scan_end_x.value():.3f}: "
@@ -741,6 +773,8 @@ class Window(QMainWindow):
             self.stop_simulation()
             if not self.loaded_profile:
                 raise ValueError("Load a saved smoothed CSV from the Scan tab first")
+            if any(sample.x_reference != 'spindle_center' for sample in self.loaded_profile):
+                raise ValueError("Load a new spindle-center CSV. Old edge-zero scans cannot be reused after changing Work X0.")
             settings = self.read_pass_rows()
             result = generate_gcode(
                 self.loaded_profile, passes=self.passes.value(),
@@ -750,7 +784,8 @@ class Window(QMainWindow):
                 safe_z=self.safe_z.value(), sensor_x_offset=self.sensor_x.value(),
                 sensor_z_offset=self.sensor_z.value(), tool_x_offset=self.tool_x.value(),
                 tool_z_offset=self.tool_z.value(), use_css=self.mode.currentIndex() == 1,
-                pass_specs=settings)
+                pass_specs=settings,
+                cut_direction="outer_to_center" if self.cut_direction.currentIndex() == 0 else "center_to_outer")
             was_opened = self.opened_gcode is not None
             self.opened_gcode = None
             self.set_program_text(result)
@@ -856,7 +891,8 @@ class Window(QMainWindow):
                 raise ValueError("This older CSV has no work X coordinates. Rescan and save the profile "
                                  "with this version before generating a toolpath.")
             self.opened_gcode = None
-            self.loaded_path.setText(f"Loaded: {path} ({len(self.loaded_profile)} points)")
+            reference = self.loaded_profile[0].x_reference
+            self.loaded_path.setText(f"Loaded: {path} ({len(self.loaded_profile)} points; X reference: {reference})")
             self.code.clear()
         except (ValueError, OSError) as exc:
             self.loaded_profile = []
@@ -878,6 +914,24 @@ class Window(QMainWindow):
         self.pass_table.setRowCount(0)
         for i in range(1, self.passes.value() + 1):
             self.add_pass(i * self.depth.value() / self.passes.value())
+
+    def change_cut_mode(self, index, reset_feed=True):
+        css = index == 1
+        self.feed_label.setText("Feed (mm/rev)" if css else "Feed (mm/min)")
+        self.pass_table.setHorizontalHeaderLabels(['Use', 'Target depth mm',
+            'Feed mm/rev' if css else 'Feed mm/min', 'RPM', 'Surface m/min'])
+        self.pass_table.setColumnHidden(3, css)
+        self.pass_table.setColumnHidden(4, not css)
+        self.rpm.setEnabled(not css)
+        self.surface_speed.setEnabled(css)
+        self.max_rpm.setEnabled(css)
+        if reset_feed:
+            self.feed.setValue(.1 if css else 50)
+
+    def set_rpm_verified(self, checked):
+        self.preferences.setValue(self.feedback_pref_key, checked)
+        if self.backend is not None:
+            self.backend.rpm_feedback_verified = checked
 
     def update_pass_defaults(self, column, value, decimals):
         for row in range(self.pass_table.rowCount()):

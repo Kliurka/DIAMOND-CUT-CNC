@@ -33,6 +33,18 @@ class PlaybackTests(unittest.TestCase):
             with self.subTest(code=code), self.assertRaises(ValueError):
                 parse_program(code)
 
+    def test_css_feed_per_rev_and_rpm_limit_playback(self):
+        code = 'G21 G90 G40 G49 G54 G8\nG94 G97 S100\nM3\nG0 X-250\nG96 D1200 S150\nG95 F0.1\nG1 Z0.01\nG1 X-150 Z0.01\nG1 X-1 Z0.01\nG1 Z0.02\nM5\nG97 G94\nM2\n'
+        moves = parse_program(code, require_preamble=True)
+        self.assertAlmostEqual(moves[1].speed, .1 * 150000 / (2 * 3.141592653589793 * 250))
+        self.assertEqual(moves[-1].speed, 120)
+        self.assertTrue(moves[1].css)
+        self.assertTrue(moves[1].feed_per_rev)
+        for invalid in [code.replace('D1200 ', ''), code.replace('G95 F0.1', 'G95'),
+                        code.replace('M3\n', ''), code.replace('G95 F0.1', 'G95 F0')]:
+            with self.assertRaises(ValueError):
+                parse_program(invalid, require_preamble=True)
+
     def test_imported_program_requires_explicit_modes_and_safe_end(self):
         from test_linuxcnc_control import ProgramTests
         self.assertTrue(parse_program(ProgramTests.code, require_preamble=True))
