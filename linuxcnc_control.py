@@ -83,7 +83,9 @@ class LinuxCNCControl:
                 "can_touch_off": bool(s.homed[0] and s.homed[2]), "table_locked": self.table_locked,
                 "test_ready": test_ready, "running": self.program_running,
                 "current_line": int(getattr(s, "motion_line", 0)),
-                "current_feed": (abs(float(s.current_vel)) * 60 if hasattr(s, 'current_vel') else None)}
+                "current_feed": (abs(float(s.current_vel)) * 60 if hasattr(s, 'current_vel') else None),
+                "axis_feed": {a: abs(float(s.joint[i]['velocity'])) * 60
+                              if 'velocity' in s.joint[i] else None for a, i in (('X', 0), ('Z', 2))}}
 
     def require_ready(self, homed=False):
         state = self.snapshot()

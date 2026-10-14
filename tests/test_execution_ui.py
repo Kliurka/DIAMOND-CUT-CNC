@@ -33,6 +33,28 @@ class Preview(QWidget):
 
 
 class ExecutionUITests(unittest.TestCase):
+    def test_operator_zero_does_not_change_css_center_or_program_coordinates(self):
+        self.status.g5x_offset = (100., 2., 3.)
+        self.backend.x_center_reference = self.backend.center_signature()
+        signature = self.backend.center_signature()
+        self.window.zero('X')
+        self.assertEqual(self.window.dros['X'][1].text(), '+0.0000')
+        self.assertEqual(self.backend.center_signature(), signature)
+        self.assertEqual(self.backend.x_center_reference, signature)
+        self.assertEqual(self.commands.calls, [])
+        self.window.capture_work_x(self.window.scan_start_x)
+        self.assertAlmostEqual(self.window.scan_start_x.value(), -90.1)
+        self.status.joint_actual_position = (15., 20., 25.)
+        self.window.refresh_machine()
+        self.assertEqual(self.window.dros['X'][1].text(), '+5.0000')
+        self.assertEqual(self.backend.center_signature(), signature)
+
+    def test_each_axis_feed_uses_its_own_joint_velocity(self):
+        self.status.joint = ({'velocity': .5}, {'velocity': 20}, {'velocity': -1.25})
+        self.window.refresh_machine()
+        self.assertEqual(self.window.axis_feed_labels['X'].text(), '30.0')
+        self.assertEqual(self.window.axis_feed_labels['Z'].text(), '75.0')
+
     def test_independent_pass_modes_directions_and_feed_units(self):
         table = self.window.pass_table
         table.cellWidget(1, 5).setCurrentIndex(1)
@@ -126,11 +148,11 @@ class ExecutionUITests(unittest.TestCase):
         self.assertFalse(self.backend.program_running)
         self.assertFalse(any(name == 'auto' for name, _ in self.commands.calls))
 
-    def test_radius_button_changes_work_reference_but_not_homing(self):
+    def test_settings_center_calibration_changes_reference_but_not_homing(self):
         self.window.known_radius.setValue(25)
-        self.window.zero_buttons[0].click()
+        self.window.center_calibration_button.click()
         self.assertIn(('mdi', ('G21 G49 G10 L20 P0 X-25.000000',)), self.commands.calls)
-        self.assertEqual(self.window.zero_buttons[0].text(), 'R')
+        self.assertEqual(self.window.zero_buttons[0].text(), '0')
         self.assertFalse(any(name == 'home' for name, _ in self.commands.calls))
 
     def test_open_saved_gcode_simulates_and_runs_without_regenerating(self):

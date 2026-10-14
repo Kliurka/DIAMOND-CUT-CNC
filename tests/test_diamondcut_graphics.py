@@ -53,6 +53,14 @@ class GraphicsTests(unittest.TestCase):
     def tearDown(self):
         self.widget.close()
 
+    def test_operator_marker_keeps_center_reference_and_stays_when_z_lifts(self):
+        self.widget.operator_x_zero = 12.7
+        self.assertEqual(self.widget.operator_origin(), (.5, 0, 2))
+        self.assertEqual(self.widget.work_origin(), (1, 0, 2))
+        self.widget.stat.actual_position = (12.7, 0, 25.4)
+        self.assertEqual(self.widget.operator_origin(), (.5, 0, 2))
+        self.assertEqual(self.widget.work_origin(), (1, 0, 2))
+
     def test_native_pick_emits_local_line_signal_but_external_update_does_not(self):
         lines = []
         self.widget.program_line_selected.connect(lines.append)
@@ -118,7 +126,7 @@ class GraphicsTests(unittest.TestCase):
         self.widget.paintGL()
         self.assertTrue(self.widget.native_painted)
         self.assertIn('X +0.000   Z +25.400 mm', captions[-1])
-        origin,tip = self.widget.draw_screen_markers.call_args.args
+        origin,tip,center = self.widget.draw_screen_markers.call_args.args
         self.assertGreater(origin[0], 200)
         self.assertGreater(origin[1], 150)
         self.assertGreater(tip[1], origin[1])

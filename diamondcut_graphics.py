@@ -21,6 +21,7 @@ class DiamondCutGraphics(GCodeGraphics):
         self.show_overlay = False
         self.show_live_plot = False
         self.simulated_work_position = None
+        self.operator_x_zero = None
         self.use_gradient_background = False
         self.setBackgroundColor(QColor(24, 27, 32))
 
@@ -88,6 +89,17 @@ class DiamondCutGraphics(GCodeGraphics):
                 g5x[1] + sin(angle) * g92[0] + cos(angle) * g92[1],
                 g5x[2] + g92[2])
 
+    def set_operator_x_zero(self, machine_x):
+        self.operator_x_zero = machine_x
+        self.updateGL()
+
+    def operator_origin(self):
+        origin = self.work_origin()
+        if self.operator_x_zero is None:
+            return origin
+        units = (self.stat.linear_units or 1) * 25.4
+        return (self.operator_x_zero / units, origin[1], origin[2])
+
     def set_view_y(self):
         # +90 about X projects +X right and +Z down (home left/top).
         self.reset()
@@ -135,8 +147,8 @@ class DiamondCutGraphics(GCodeGraphics):
         super().paintGL()
         self.stat.poll()
         origin, tip = self.work_origin(), self.tool_tip()
-        self.draw_screen_markers(self.project_xz(origin, matrix),
-                                 self.project_xz(tip, matrix))
+        self.draw_screen_markers(self.project_xz(self.operator_origin(), matrix),
+                                 self.project_xz(tip, matrix), self.project_xz(origin, matrix))
         units = (self.stat.linear_units or 1) * 25.4
         dx, dy, dz = (a - b for a, b in zip(tip, origin))
         angle = radians(self.stat.rotation_xy)
@@ -146,7 +158,7 @@ class DiamondCutGraphics(GCodeGraphics):
             f"X {work_x:+.3f}   Z {dz * units:+.3f} mm\n"
             "Work 0: X 0.000   Z 0.000  |  Cyan origin / Yellow tool")
 
-    def draw_screen_markers(self, origin, tip):
+    def draw_screen_markers(self, origin, tip, center=None):
         width, height = self.winfo_width(), self.winfo_height()
         GL.glPushAttrib(GL.GL_ENABLE_BIT | GL.GL_CURRENT_BIT | GL.GL_LINE_BIT)
         GL.glDisable(GL.GL_LIGHTING)
@@ -161,6 +173,13 @@ class DiamondCutGraphics(GCodeGraphics):
         GL.glPushMatrix()
         GL.glLoadIdentity()
         try:
+            if center is not None:
+                GL.glColor3f(1, .25, .25)
+                GL.glLineWidth(1)
+                GL.glBegin(GL.GL_LINES)
+                GL.glVertex2f(center[0], 0)
+                GL.glVertex2f(center[0], height)
+                GL.glEnd()
             x, y = tip
             GL.glColor3f(1, .85, .1)
             GL.glBegin(GL.GL_TRIANGLES)
