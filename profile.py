@@ -24,6 +24,8 @@ class PassSpec:
     rpm: int
     surface_speed: float
     enabled: bool = True
+    use_css: bool | None = None
+    cut_direction: str | None = None
 
 
 def simulated_scan(radius_mm: float, step_mm: float) -> list[Sample]:
@@ -145,25 +147,28 @@ def generate_gcode(
         pass_specs = [PassSpec(total_depth * i / passes, feed, rpm, surface_speed)
                       for i in range(1, passes + 1)]
     active = [p for p in pass_specs if p.enabled]
+    def css_mode(p):
+        return use_css if p.use_css is None else p.use_css
+    any_css = any(css_mode(p) for p in active)
     if not active or any(not math.isfinite(p.depth_mm) or p.depth_mm <= 0 or p.depth_mm > max_depth or
                          not math.isfinite(p.feed) or p.feed <= 0 or p.rpm <= 0 or
-                         (use_css and (not math.isfinite(p.surface_speed) or p.surface_speed <= 0))
+                         (css_mode(p) and (not math.isfinite(p.surface_speed) or p.surface_speed <= 0))
                          for p in active):
         raise ValueError("Invalid per-pass setting or maximum cut depth exceeded")
     if any(a.depth_mm >= b.depth_mm for a, b in zip(active, active[1:])):
         raise ValueError("Enabled pass depths must increase")
-    if safe_z <= 0 or (use_css and surface_speed <= 0):
+    if safe_z <= 0:
         raise ValueError("Invalid clearance or surface speed")
     if rim_radius is None:
         if any(s.work_x_mm is None or not math.isfinite(s.work_x_mm) for s in samples):
             raise ValueError("Profile needs saved work X coordinates")
-        if use_css and any(s.x_reference != 'spindle_center' for s in samples):
+        if any_css and any(s.x_reference != 'spindle_center' for s in samples):
             raise ValueError("CSS needs a new CSV marked spindle_center; old edge-zero files must be rescanned")
         xs = [s.work_x_mm + tool_x_offset - sensor_x_offset for s in samples]
         diffs = [b - a for a, b in zip(xs, xs[1:])]
         if not diffs or not (all(d > 0 for d in diffs) or all(d < 0 for d in diffs)):
             raise ValueError("Work X must be strictly monotonic")
-        if (use_css or all(s.x_reference == "spindle_center" for s in samples)) and any(x > 0 for x in xs):
+        if (any_css or all(s.x_reference == "spindle_center" for s in samples)) and any(x > 0 for x in xs):
             raise ValueError("CSS tool path cannot cross the spindle center")
     else:
         if not math.isfinite(rim_radius) or rim_radius <= 0:
@@ -182,13 +187,18 @@ def generate_gcode(
         raise ValueError("Invalid safe Z")
     if cut_direction not in ('scan', 'outer_to_center', 'center_to_outer'):
         raise ValueError("Invalid cutting direction")
-    if rim_radius is None and cut_direction != 'scan':
-        points = sorted(zip(xs, zprofile), reverse=cut_direction == 'center_to_outer')
-        xs, zprofile = map(list, zip(*points))
+    def pass_points(setting):
+        direction = setting.cut_direction or cut_direction
+        if direction not in ('scan', 'outer_to_center', 'center_to_outer'):
+            raise ValueError('Invalid per-pass cutting direction')
+        points = list(zip(xs, zprofile))
+        if direction != 'scan':
+            points.sort(key=lambda p: abs(p[0]), reverse=direction == 'outer_to_center')
+        return points
     def start_rpm(setting):
-        if not use_css:
+        if not css_mode(setting):
             return setting.rpm
-        radius = abs(xs[0])
+        radius = abs(pass_points(setting)[0][0])
         return min(max_rpm, setting.surface_speed * 1000 / (2 * math.pi * radius)) if radius else max_rpm
     lines = [
         "(PROFILE TOOLPATH - VERIFY COORDINATES AND CLEARANCES)",
@@ -196,27 +206,28 @@ def generate_gcode(
         "G21 G90 G40 G49 G54",
         "G8",
         "G94",
-        f"G97 S{start_rpm(active[0]):.3f}" if use_css else f"G97 S{active[0].rpm}",
+        f"G97 S{start_rpm(active[0]):.3f}" if css_mode(active[0]) else f"G97 S{active[0].rpm}",
         "M3",
     ]
     for number, setting in enumerate(active, 1):
+        pass_xs, pass_zs = map(list, zip(*pass_points(setting)))
+        css = css_mode(setting)
         depth = setting.depth_mm
         lines.append(f"(PASS {number}/{len(active)}; depth {depth:.4f} mm)")
-        lines.append(f"G97 S{start_rpm(setting):.3f}" if use_css else f"G97 S{setting.rpm}")
-        if use_css:
-            lines.append("G94")
-        else:
+        lines.append(f"G97 S{start_rpm(setting):.3f}" if css else f"G97 S{setting.rpm}")
+        lines.append("G94")
+        if not css:
             lines.append(f"F{setting.feed:.4f}")
         lines.append(f"G0 Z{clearance:.4f}")
-        lines.append(f"G0 X{xs[0]:.4f}")
-        if use_css:
+        lines.append(f"G0 X{pass_xs[0]:.4f}")
+        if css:
             lines += [f"G96 D{max_rpm} S{setting.surface_speed:.3f}", "G95", f"F{setting.feed:.4f}"]
-        lines.append(f"G1 Z{zprofile[0] + z_sign * depth:.4f}")
-        for x, z in zip(xs[1:], zprofile[1:]):
+        lines.append(f"G1 Z{pass_zs[0] + z_sign * depth:.4f}")
+        for x, z in zip(pass_xs[1:], pass_zs[1:]):
             lines.append(f"G1 X{x:.4f} Z{z + z_sign * depth:.4f}")
-        if use_css:
+        if css:
             lines += [f"G97 S{start_rpm(setting):.3f}", "G94"]
         lines.append(f"G0 Z{clearance:.4f}")
-        lines.append(f"G0 X{xs[0]:.4f}")
+        lines.append(f"G0 X{pass_xs[0]:.4f}")
     lines += ["M5", "G97 G94", "M2"]
     return "\n".join(lines) + "\n"

@@ -6,6 +6,22 @@ from profile import PassSpec, Sample, generate_gcode, load_csv, save_csv, simula
 
 
 class ProfileTests(unittest.TestCase):
+    def test_mixed_pass_modes_and_directions_keep_profile_pairs(self):
+        from gcode_playback import parse_program
+        points = [Sample(0, 2, -100, 'spindle_center'), Sample(20, 3, -80, 'spindle_center')]
+        code = generate_gcode(points, passes=3, total_depth=.3, max_depth=.5,
+            feed=50, rpm=500, surface_speed=150, max_rpm=1200, safe_z=5,
+            pass_specs=[PassSpec(.1, 50, 500, 150, use_css=False, cut_direction='outer_to_center'),
+                        PassSpec(.2, .05, 600, 120, use_css=True, cut_direction='center_to_outer'),
+                        PassSpec(.3, 40, 700, 100, use_css=False, cut_direction='outer_to_center')])
+        passes = code.split('(PASS ')[1:]
+        self.assertIn('G0 X-100.0000\nG1 Z0.1000\nG1 X-80.0000 Z1.1000', passes[0])
+        self.assertIn('G0 X-80.0000\nG96 D1200 S120.000\nG95\nF0.0500\nG1 Z1.2000\nG1 X-100.0000 Z0.2000', passes[1])
+        self.assertIn('G97 S700\nG94\nF40.0000', passes[2])
+        moves = parse_program(code)
+        self.assertTrue(moves.uses_css)
+        self.assertTrue(any(m.feed_per_rev for m in moves))
+
     def test_centered_bidirectional_scan_csv_and_filter(self):
         forward = simulated_scan_range(-250, -240, 2, centered_x=True)
         reverse = simulated_scan_range(-240, -250, 2, centered_x=True)

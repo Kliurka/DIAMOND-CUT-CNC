@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
 from profile import PassSpec, generate_gcode, load_csv, save_csv, simulated_scan_range, smooth
 from gcode_playback import Playback, parse_program
 from code_editor import GCodeText
+from touch_keyboard import TouchKeyboard
 
 
 class Plot(QWidget):
@@ -117,6 +118,7 @@ class Window(QMainWindow):
         split.setSizes([350, 930])
         split.setChildrenCollapsible(False)
         self.setCentralWidget(split)
+        self.touch_keyboard = TouchKeyboard(self, self.pass_table)
         self.update_dros()
         self.statusBar().showMessage("SIMULATION ONLY — no machine or sensor connected")
         if self.backend is not None:
@@ -326,13 +328,16 @@ class Window(QMainWindow):
         pass_hint = QLabel("Pass depths from Work Z0 (+Z). Double-click cells to edit.")
         pass_hint.setWordWrap(True)
         turn_layout.addWidget(pass_hint)
-        self.pass_table = QTableWidget(0, 5)
-        self.pass_table.setHorizontalHeaderLabels(["Use", "Target depth mm", "Feed", "RPM", "Surface m/min"])
+        self.pass_table = QTableWidget(0, 7)
+        self.pass_table.setHorizontalHeaderLabels(["Use", "Target depth mm", "Feed", "RPM", "Surface m/min", "Mode", "Direction"])
         self.pass_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.pass_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.pass_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.pass_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.pass_table.setMinimumHeight(110)
         turn_layout.addWidget(self.pass_table, 1)
         self.reset_pass_rows()
+        self.cut_direction.currentIndexChanged.connect(self.change_pass_direction_defaults)
         self.passes.valueChanged.connect(self.reset_pass_rows)
         self.depth.valueChanged.connect(self.reset_pass_rows)
         self.feed.valueChanged.connect(lambda: self.update_pass_defaults(2, self.feed.value(), 4))
@@ -715,6 +720,7 @@ class Window(QMainWindow):
             self.control_action(self.backend.stop_jog)
 
     def shutdown(self):
+        self.touch_keyboard.shutdown()
         self.preferences.sync()
         self.stop_simulation()
         if self.backend is not None:
@@ -722,6 +728,7 @@ class Window(QMainWindow):
             self.backend.stop()
 
     def closeEvent(self, event):
+        self.touch_keyboard.shutdown()
         if self.backend is not None:
             try:
                 self.shutdown()
@@ -909,24 +916,59 @@ class Window(QMainWindow):
         self.pass_table.setItem(row, 0, enabled)
         for col, value in enumerate(values, 1):
             self.pass_table.setItem(row, col, QTableWidgetItem(value))
+        mode = QComboBox()
+        mode.addItems(['RPM · mm/min', 'CSS · mm/rev'])
+        mode.setCurrentIndex(self.mode.currentIndex())
+        direction = QComboBox()
+        direction.addItems(['Outside → center', 'Center → outside'])
+        direction.setCurrentIndex(self.cut_direction.currentIndex())
+        self.pass_table.setCellWidget(row, 5, mode)
+        self.pass_table.setCellWidget(row, 6, direction)
+        mode.currentIndexChanged.connect(lambda index, row=row: self.change_pass_mode(row, index))
+        self.change_pass_mode(row, mode.currentIndex(), reset_feed=False)
 
     def reset_pass_rows(self):
+        old = []
+        for row in range(self.pass_table.rowCount()):
+            old.append(([self.pass_table.item(row, col).text() for col in range(2, 5)],
+                        self.pass_table.item(row, 0).checkState(),
+                        self.pass_table.cellWidget(row, 5).currentIndex(),
+                        self.pass_table.cellWidget(row, 6).currentIndex()))
         self.pass_table.setRowCount(0)
         for i in range(1, self.passes.value() + 1):
             self.add_pass(i * self.depth.value() / self.passes.value())
+            row = i - 1
+            if row < len(old):
+                values, enabled, mode, direction = old[row]
+                self.pass_table.cellWidget(row, 5).setCurrentIndex(mode)
+                self.pass_table.cellWidget(row, 6).setCurrentIndex(direction)
+                self.pass_table.item(row, 0).setCheckState(enabled)
+                for col, value in enumerate(values, 2):
+                    self.pass_table.item(row, col).setText(value)
 
     def change_cut_mode(self, index, reset_feed=True):
         css = index == 1
         self.feed_label.setText("Feed (mm/rev)" if css else "Feed (mm/min)")
-        self.pass_table.setHorizontalHeaderLabels(['Use', 'Target depth mm',
-            'Feed mm/rev' if css else 'Feed mm/min', 'RPM', 'Surface m/min'])
-        self.pass_table.setColumnHidden(3, css)
-        self.pass_table.setColumnHidden(4, not css)
+        for row in range(self.pass_table.rowCount()):
+            self.pass_table.cellWidget(row, 5).setCurrentIndex(index)
         self.rpm.setEnabled(not css)
         self.surface_speed.setEnabled(css)
-        self.max_rpm.setEnabled(css)
+        self.max_rpm.setEnabled(True)
         if reset_feed:
             self.feed.setValue(.1 if css else 50)
+
+    def change_pass_mode(self, row, index, reset_feed=True):
+        if reset_feed:
+            self.pass_table.item(row, 2).setText('0.1000' if index else '50.0000')
+        self.pass_table.item(row, 2).setToolTip('mm/rev' if index else 'mm/min')
+        for column, relevant in ((3, not index), (4, bool(index))):
+            item = self.pass_table.item(row, column)
+            item.setFlags((item.flags() | Qt.ItemIsEditable) if relevant else (item.flags() & ~Qt.ItemIsEditable))
+            item.setForeground(QColor('#202020' if relevant else '#888888'))
+
+    def change_pass_direction_defaults(self, index):
+        for row in range(self.pass_table.rowCount()):
+            self.pass_table.cellWidget(row, 6).setCurrentIndex(index)
 
     def set_rpm_verified(self, checked):
         self.preferences.setValue(self.feedback_pref_key, checked)
@@ -935,6 +977,8 @@ class Window(QMainWindow):
 
     def update_pass_defaults(self, column, value, decimals):
         for row in range(self.pass_table.rowCount()):
+            if column == 2 and self.pass_table.cellWidget(row, 5).currentIndex() != self.mode.currentIndex():
+                continue
             self.pass_table.item(row, column).setText(f"{value:.{decimals}f}")
 
     def set_code_numbers(self, visible):
@@ -973,7 +1017,9 @@ class Window(QMainWindow):
             try:
                 values = [self.pass_table.item(row, col).text() for col in range(1, 5)]
                 rows.append(PassSpec(float(values[0]), float(values[1]), int(values[2]),
-                                     float(values[3]), self.pass_table.item(row, 0).checkState() == Qt.Checked))
+                                     float(values[3]), self.pass_table.item(row, 0).checkState() == Qt.Checked,
+                                     self.pass_table.cellWidget(row, 5).currentIndex() == 1,
+                                     'outer_to_center' if self.pass_table.cellWidget(row, 6).currentIndex() == 0 else 'center_to_outer'))
             except (AttributeError, ValueError):
                 raise ValueError(f"Invalid value in pass row {row+1}")
         return rows

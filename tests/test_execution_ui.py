@@ -33,6 +33,54 @@ class Preview(QWidget):
 
 
 class ExecutionUITests(unittest.TestCase):
+    def test_independent_pass_modes_directions_and_feed_units(self):
+        table = self.window.pass_table
+        table.cellWidget(1, 5).setCurrentIndex(1)
+        table.cellWidget(1, 6).setCurrentIndex(1)
+        table.item(1, 2).setText('0.05')
+        self.window.feed.setValue(60)
+        rows = self.window.read_pass_rows()
+        self.assertFalse(rows[0].use_css)
+        self.assertEqual(rows[0].feed, 60)
+        self.assertTrue(rows[1].use_css)
+        self.assertEqual(rows[1].feed, .05)
+        self.assertEqual(rows[1].cut_direction, 'center_to_outer')
+        self.assertTrue(self.window.generate())
+        self.assertIn('G96', self.window.code.toPlainText())
+        self.window.run_gcode()
+        self.assertFalse(self.backend.program_running)
+
+    def test_keyboard_opens_for_touch_but_not_mouse(self):
+        from PyQt5.QtCore import QEvent
+        from PyQt5.QtWidgets import QLineEdit
+        from unittest.mock import Mock
+        keyboard = self.window.touch_keyboard
+        field = self.window.feed.findChild(QLineEdit)
+        mouse = QEvent(QEvent.MouseButtonPress)
+        self.assertFalse(keyboard.eventFilter(field, mouse))
+        touch = Mock()
+        touch.type.return_value = QEvent.TouchBegin
+        with patch('touch_keyboard.QTimer.singleShot') as schedule:
+            self.assertTrue(keyboard.eventFilter(field, touch))
+            self.assertTrue(schedule.called)
+            touch.accept.assert_called_once()
+        keyboard.busy = False
+
+    def test_touch_keypad_accepts_decimal_comma_and_cancel_preserves_value(self):
+        from PyQt5.QtWidgets import QDialog, QLineEdit
+        keyboard = self.window.touch_keyboard
+        field = self.window.feed.findChild(QLineEdit)
+        def accept(dialog):
+            dialog.findChild(QLineEdit).setText('12,5')
+            return QDialog.Accepted
+        with patch('touch_keyboard.QDialog.exec_', accept):
+            keyboard.open_target(field)
+        self.assertEqual(self.window.feed.value(), 12.5)
+        with patch('touch_keyboard.QDialog.exec_', return_value=QDialog.Rejected):
+            keyboard.open_target(field)
+        self.assertEqual(self.window.feed.value(), 12.5)
+        self.assertFalse(keyboard.busy)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])

@@ -279,3 +279,25 @@ RPM if the selected pitch would exceed a limit. Loss of the feedback connection
 while executing G95 aborts the program. Existing soft limits and other interlocks
 remain enforced. A plain X zero or external X work-offset change invalidates the
 CSS center calibration. Recheck/set R after changing tools or offsets.
+
+### Touch input and independent pass modes
+
+Touching a numeric field or editable pass-table value opens an on-screen keypad;
+mouse clicks keep ordinary editing. OK applies the value; Cancel leaves it alone.
+Decimal commas are accepted. Text fields use a keyboard with Shift. The Linux
+touchscreen driver must deliver real touch events to Qt; a mouse-only emulation
+device cannot be distinguished reliably from a mouse. Verify on the actual panel.
+
+Each pass row has its own RPM/CSS mode and Outside → center / Center → outside
+direction. Feed is mm/min for RPM rows and mm/rev for CSS rows (also shown in the
+mode label and feed-cell tooltip). Switching a row's mode resets its feed to 50
+mm/min or 0.1 mm/rev; check the value before generating. RPM and surface-speed
+cells remain visible, with the unused value greyed out. The controls above the
+table apply defaults to all rows; the common feed control changes only rows of
+the selected mode. Changing pass count or total depth retains surviving rows'
+speed, mode and direction settings. Maximum RPM remains a shared CSS limit.
+
+The generator preserves X/Z profile pairs when reversing direction, retracts to
+clearance between passes, and explicitly selects G97/G94 for positioning before
+G96/G95 cutting. A program containing any CSS/G95 pass needs the same real spindle
+feedback checks as a program using CSS throughout. Simulation supports mixed modes.
