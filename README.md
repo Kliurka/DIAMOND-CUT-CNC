@@ -297,8 +297,10 @@ table apply defaults to all rows; the common feed control changes only rows of
 the selected mode. Changing pass count or total depth retains surviving rows'
 speed, mode and direction settings. Maximum RPM remains a shared CSS limit.
 
-The generator preserves X/Z profile pairs when reversing direction, retracts to
-clearance between passes, and explicitly selects G97/G94 for positioning before
+The generator preserves X/Z profile pairs when reversing direction. Consecutive
+passes sharing an X endpoint feed directly to the next Z depth without retracting.
+Repositioning to a different X start and the final return to the first scan X
+retract to clearance. It explicitly selects G97/G94 for positioning before
 G96/G95 cutting. A program containing any CSS/G95 pass needs the same real spindle
 feedback checks as a program using CSS throughout. Simulation supports mixed modes.
 

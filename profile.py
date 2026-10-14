@@ -222,8 +222,10 @@ def generate_gcode(
         lines.append("G94")
         if not css:
             lines.append(f"F{setting.feed:.4f}")
-        lines.append(f"G0 Z{clearance:.4f}")
         if current_x is None or f'{current_x:.4f}' != f'{pass_xs[0]:.4f}':
+            # Retract only when X must reposition. Joined reverse passes feed
+            # straight into their next depth at the shared profile endpoint.
+            lines.append(f"G0 Z{clearance:.4f}")
             lines.append(f"G0 X{pass_xs[0]:.4f}")
         if css:
             lines += [f"G96 D{max_rpm} S{setting.surface_speed:.3f}", "G95", f"F{setting.feed:.4f}"]
@@ -232,11 +234,9 @@ def generate_gcode(
             lines.append(f"G1 X{x:.4f} Z{z + z_sign * depth:.4f}")
         if css:
             lines += [f"G97 S{start_rpm(setting):.3f}", "G94"]
-        lines.append(f"G0 Z{clearance:.4f}")
         current_x = pass_xs[-1]
-        # The next pass positions from this endpoint at Z clearance. Opposite
-        # directions share an endpoint and need no X return/reposition at all.
         if number == len(active):
-            lines.append(f"G0 X{pass_xs[0]:.4f}")
+            lines.append(f"G0 Z{clearance:.4f}")
+            lines.append(f"G0 X{xs[0]:.4f}")
     lines += ["M5", "G97 G94", "M2"]
     return "\n".join(lines) + "\n"

@@ -6,6 +6,25 @@ from profile import PassSpec, Sample, generate_gcode, load_csv, save_csv, simula
 
 
 class ProfileTests(unittest.TestCase):
+    def test_joined_reverse_passes_feed_depth_without_retract_and_return_to_scan_start(self):
+        points = [Sample(0, 1, -150, 'spindle_center'), Sample(70, 21, -80, 'spindle_center')]
+        specs = [PassSpec(.05 * (i + 1), 50, 500, 150,
+                         cut_direction='outer_to_center' if i % 2 == 0 else 'center_to_outer')
+                 for i in range(4)]
+        options = dict(passes=4, total_depth=.2, max_depth=.5, feed=50,
+                       rpm=500, surface_speed=150, max_rpm=1200, safe_z=5)
+        code = generate_gcode(points, pass_specs=specs, **options)
+        blocks = code.split('(PASS ')[1:]
+        self.assertEqual(code.count('G0 Z'), 2)
+        for block in blocks[1:-1]:
+            self.assertNotIn('G0', block)
+        self.assertIn('G1 Z20.1000\nG1 X-150.0000 Z0.1000', blocks[1])
+        self.assertTrue(code.endswith('G0 Z-5.0000\nG0 X-150.0000\nM5\nG97 G94\nM2\n'))
+        same_direction = [PassSpec(p.depth_mm, 50, 500, 150, cut_direction='outer_to_center') for p in specs]
+        same = generate_gcode(points, pass_specs=same_direction, **options)
+        self.assertEqual(same.count('G0 Z'), 5)
+        self.assertEqual(same.count('G0 Z-5.0000\nG0 X-150.0000'), 5)
+
     def test_mixed_pass_modes_and_directions_keep_profile_pairs(self):
         from gcode_playback import parse_program
         points = [Sample(0, 2, -100, 'spindle_center'), Sample(20, 3, -80, 'spindle_center')]
@@ -61,7 +80,7 @@ class ProfileTests(unittest.TestCase):
         code = generate_gcode(points, passes=2, total_depth=.2, max_depth=.5,
                               feed=30, rpm=500, surface_speed=100,
                               max_rpm=1200, safe_z=5)
-        self.assertEqual(code.count('G0 Z-8.0000'), 4)
+        self.assertEqual(code.count('G0 Z-8.0000'), 3)
         self.assertIn('G1 Z0.1000', code)
         self.assertIn('G1 X15.0000 Z-2.8000', code)
         self.assertIn('G1 X20.0000 Z1.2000', code)
