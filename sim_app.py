@@ -37,13 +37,17 @@ class Plot(QWidget):
         bounds = self.rect().adjusted(70, 36, -24, -56)
         painter.setPen(QColor("#8996a7"))
         painter.drawRect(bounds)
-        painter.drawText(bounds.left(), self.height() - 12, "Distance from scan start (mm)")
         if not self.raw:
             painter.drawText(bounds, Qt.AlignCenter, "Run simulated scan")
             return
         points = self.raw + self.filtered
-        x_min = min(s.edge_mm for s in points)
-        x_max = max(s.edge_mm for s in points)
+        use_work_x = all(s.work_x_mm is not None for s in points)
+        def plot_x(sample):
+            return sample.work_x_mm if use_work_x else sample.edge_mm
+        painter.drawText(bounds.left(), self.height() - 12,
+                         'Work X (mm); +X right, +Z down' if use_work_x else 'Distance from scan start (mm); +Z down')
+        x_min = min(plot_x(s) for s in points)
+        x_max = max(plot_x(s) for s in points)
         z_min = min(s.z_mm for s in points) - 0.2
         z_max = max(s.z_mm for s in points) + 0.2
         x_span = max(x_max - x_min, 0.001)
@@ -60,8 +64,8 @@ class Plot(QWidget):
             painter.setPen(QPen(QColor(color), 2))
             prev = None
             for sample in series:
-                x = bounds.center().x() + (sample.edge_mm - x_center) * scale_x
-                y = bounds.center().y() - (sample.z_mm - z_center) * scale_z
+                x = bounds.center().x() + (plot_x(sample) - x_center) * scale_x
+                y = bounds.center().y() + (sample.z_mm - z_center) * scale_z
                 if prev is not None:
                     painter.drawLine(round(prev[0]), round(prev[1]), round(x), round(y))
                 prev = x, y
