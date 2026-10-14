@@ -36,7 +36,10 @@ def simulated_scan(radius_mm: float, step_mm: float) -> list[Sample]:
     for i in range(count + 1):
         edge = min(i * step_mm, radius_mm)
         radius = radius_mm - edge
-        shape = 1.0 + 0.7 * math.exp(-((radius - 0.72 * radius_mm) / (0.10 * radius_mm)) ** 2)
+        progress = edge / radius_mm
+        # About 20 mm downward (+Z) over the scan, with level ends.
+        shape = 1.0 + 20.0 * progress ** 2 * (3.0 - 2.0 * progress)
+        shape += 0.7 * math.exp(-((radius - 0.72 * radius_mm) / (0.10 * radius_mm)) ** 2)
         shape += 0.32 * math.exp(-((radius - 0.36 * radius_mm) / (0.16 * radius_mm)) ** 2)
         noise = 0.07 * math.sin(i * 2.34) + 0.04 * math.sin(i * 0.43)
         result.append(Sample(edge, shape + noise))
