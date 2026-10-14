@@ -164,6 +164,12 @@ class Window(QMainWindow):
             grid.addWidget(button, row, 3)
             self.zero_buttons.append(button)
         root.addWidget(group)
+        self.current_feed_label = QLabel('Current feed: — mm/min')
+        self.actual_rpm_label = QLabel('Spindle actual: — RPM')
+        self.current_feed_label.setToolTip('Current LinuxCNC motion speed, including acceleration and feed override')
+        self.actual_rpm_label.setToolTip('Measured spindle speed from the RPM sensor')
+        root.addWidget(self.current_feed_label)
+        root.addWidget(self.actual_rpm_label)
         reset = QPushButton("Reset / E-stop")
         reset.clicked.connect(self.toggle_estop)
         root.addWidget(reset)
@@ -642,6 +648,8 @@ class Window(QMainWindow):
         try:
             state = self.backend.snapshot()
             self.live_state = state
+            feed = state.get('current_feed')
+            self.current_feed_label.setText(f'Current feed: {feed:.1f} mm/min' if feed is not None else 'Current feed: — mm/min')
             self.machine = state["machine"]
             self.offset = {a: state["machine"][a] - state["work"][a] for a in ("X", "Y", "Z")}
             for axis, (machine, work) in self.dros.items():
@@ -663,9 +671,11 @@ class Window(QMainWindow):
                 connected = self.backend.spindle_feedback()
                 reference = 'set this session' if self.backend.x_center_reference == self.backend.center_signature() else 'press R after homing'
                 self.rpm_status.setText(f"Actual RPM: {rpm:.1f}" if rpm is not None and connected else "Actual RPM: feedback not connected")
+                self.actual_rpm_label.setText(f'Spindle actual: {rpm:.1f} RPM' if rpm is not None and connected else 'Spindle actual: — RPM (no feedback)')
                 self.rpm_status.setText(self.rpm_status.text() + f" | X center: {reference}")
             except Exception:
                 self.rpm_status.setText("RPM feedback unavailable")
+                self.actual_rpm_label.setText('Spindle actual: — RPM (unavailable)')
             self.rpm_feedback_verified.setEnabled(not state['running'])
             ready = state["ready"]
             if self.held_jog is not None:

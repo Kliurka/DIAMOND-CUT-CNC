@@ -82,7 +82,8 @@ class LinuxCNCControl:
                 "homed": bool(s.homed[0] and s.homed[2]), "homing": homing, "stationary": bool(s.inpos),
                 "can_touch_off": bool(s.homed[0] and s.homed[2]), "table_locked": self.table_locked,
                 "test_ready": test_ready, "running": self.program_running,
-                "current_line": int(getattr(s, "motion_line", 0))}
+                "current_line": int(getattr(s, "motion_line", 0)),
+                "current_feed": (abs(float(s.current_vel)) * 60 if hasattr(s, 'current_vel') else None)}
 
     def require_ready(self, homed=False):
         state = self.snapshot()
