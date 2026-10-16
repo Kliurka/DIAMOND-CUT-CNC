@@ -334,3 +334,39 @@ Do not recalibrate X to a new arbitrary point between scanning and turning. Ther
 is no X reset action. The red vertical preview line and cyan X0Z0 mark the real
 spindle-center X reference and surface Z0. Actual feed beside X/Z comes from each
 joint velocity in mm/min, excluding table Y. Spindle actual remains measured RPM.
+
+
+### Manual lathe tools
+
+The **4. Tools** tab edits T1–T5 in the current machine INI's
+`[EMCIO] TOOL_TABLE` file. It keeps other tools/comments, makes a `.bak`
+backup, and refuses to overwrite an externally changed file without Reload.
+The editor supports a file table and nonrandom manual changer, not a tool
+database. The original PNCconf INI and HAL are not rewritten.
+
+Each tool has a name, signed X/Z offsets in mm, nose radius R, front angle I,
+back angle J and orientation Q (0–9). R is saved as the native diameter D=2R.
+X offsets use radius units (G8). Select a row for its geometry schematic;
+Q follows LinuxCNC's lathe orientation numbering. No dimensions are assumed
+for a new tool: enter the measured tool values.
+
+Calibrate the spindle center with the master tool and cancelled compensation.
+Enter and **Save tools**, physically mount the desired tool, then press
+**Use mounted tool** and confirm. This sends M61 Qn and G43 Hn without an M6
+or axis move. Recheck surface Z0 at the loaded scan start before cutting.
+**Cancel tool offsets** sends M61 Q0/G49. Tool changes require homed X/Z,
+healthy Mesa and stopped, idle Manual mode; saves/reloads also reject motion,
+homing, running programs and active output tests.
+
+New generated programs retain spindle-centered profile X coordinates and
+include G18/G43 Hn plus a tool-record signature. Native tool offsets are
+applied once by LinuxCNC, not baked into profile coordinates. Run checks the
+mounted tool, record signature and compensated machine limits, and reloads
+LinuxCNC's table before opening the program. After table changes, select the
+mounted tool again and regenerate code. Simulation supports the same G43
+offsets. Nose shape is saved and shown schematically; generated cutting paths
+remain G40, with **no automatic G41/G42 nose-radius compensation**.
+
+Standalone preview uses `~/.config/diamondcut/preview-tool.tbl`; it does not
+modify the real machine's tool table. Real QtVCP/NML and physical tool offsets
+still need verification on the LinuxCNC desktop.

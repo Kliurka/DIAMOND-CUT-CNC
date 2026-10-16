@@ -43,7 +43,7 @@ class HandlerClass:
         self.mesa_panel = MesaIOPanel(hal.get_value, self.panel,
                                      writer=hal.set_p, allow_bench=not real, backend=backend)
         tabs = self.panel.centralWidget().widget(1)
-        tabs.addTab(self.mesa_panel, "4. Mesa I/O")
+        tabs.addTab(self.mesa_panel, "5. Mesa I/O")
         if not real:
             self.panel.statusBar().showMessage("Axis controls and laser scan simulated — real bench controls in Mesa I/O")
 

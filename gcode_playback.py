@@ -15,15 +15,19 @@ class Move:
     start_x: float | None = None
     start_z: float | None = None
     max_speed: float = 0
+    tool_x: float = 0
+    tool_z: float = 0
+    tool_number: int = 0
 
 
 class ProgramMoves(list):
     def __init__(self):
         super().__init__()
         self.uses_css = False
+        self.tool_numbers = set()
 
 
-def parse_program(code, start=(0, 0), rapid=600, require_preamble=False):
+def parse_program(code, start=(0, 0), rapid=600, require_preamble=False, tools=None, initial_tool_offset=(0, 0)):
     x, z = start
     rapid_axes = rapid if isinstance(rapid, dict) else {'X': rapid, 'Z': rapid}
     if set(rapid_axes) != set('XZ') or not all(math.isfinite(v) for v in (x, z, *rapid_axes.values())) or any(v <= 0 for v in rapid_axes.values()):
@@ -33,6 +37,10 @@ def parse_program(code, start=(0, 0), rapid=600, require_preamble=False):
     spindle_mode, spindle_setting, rpm_limit = None, None, None
     modes, moves = set(), ProgramMoves()
     ended = spindle_on = False
+    tool_x, tool_z = initial_tool_offset
+    if not all(math.isfinite(v) for v in (tool_x, tool_z)):
+        raise ValueError('Invalid initial tool offset')
+    active_tool = 0
     expression = r'([A-Z])\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))'
     for line, text in enumerate(code.splitlines(), 1):
         text = re.sub(r'\([^)]*\)', '', text).split(';')[0].strip().upper()
@@ -46,16 +54,35 @@ def parse_program(code, start=(0, 0), rapid=600, require_preamble=False):
         groups = {}
         for letter, value in words:
             groups.setdefault(letter, []).append(value)
-        if any(letter not in 'GMXZSD F'.replace(' ', '') for letter in groups):
+        if any(letter not in 'GMXZSDHF'.replace(' ', '') for letter in groups):
             raise ValueError(f'Unsupported word at line {line}')
         gs = groups.get('G', [])
-        if any(g not in (0, 1, 21, 90, 40, 49, 54, 8, 94, 95, 96, 97) for g in gs):
+        if any(g not in (0, 1, 18, 21, 90, 40, 43, 49, 54, 8, 94, 95, 96, 97) for g in gs):
             raise ValueError(f'Only metric absolute straight X/Z programs are supported (line {line})')
-        for modal_group in ((0, 1), (94, 95), (96, 97)):
+        for modal_group in ((0, 1), (43, 49), (94, 95), (96, 97)):
             if sum(g in modal_group for g in gs) > 1:
                 raise ValueError(f'Conflicting modal commands at line {line}')
-        if any(len(groups.get(letter, [])) > 1 for letter in 'XZSD F'.replace(' ', '')):
+        if any(len(groups.get(letter, [])) > 1 for letter in 'XZSDHF'):
             raise ValueError(f'Duplicate word at line {line}')
+        if 'H' in groups and 43 not in gs:
+            raise ValueError('H requires G43')
+        if 49 in gs or 43 in gs:
+            if moves:
+                raise ValueError('Change tool compensation only before program motion')
+            new_x = new_z = 0
+            active_tool = 0
+            if 43 in gs:
+                n = groups.get('H', [0.0])[0]
+                if not n.is_integer() or not tools or int(n) not in tools:
+                    raise ValueError('G43 needs an explicit saved tool H1–H5')
+                active_tool = int(n)
+                tool = tools[active_tool]
+                tool.validate()
+                new_x, new_z = tool.value('X'), tool.value('Z')
+                moves.tool_numbers.add(active_tool)
+            # Offset changes shift the coordinate reading without moving the holder.
+            x, z = x + tool_x - new_x, z + tool_z - new_z
+            tool_x, tool_z = new_x, new_z
         if 96 in gs:
             moves.uses_css = True
             if 'D' not in groups or 'S' not in groups:
@@ -123,7 +150,7 @@ def parse_program(code, start=(0, 0), rapid=600, require_preamble=False):
             min_radius = min(abs(x), abs(nx))
             peak_rpm = (min(rpm_limit, spindle_setting * 1000 / (2 * math.pi * min_radius)) if min_radius else rpm_limit) if spindle_mode == 96 else spindle_setting
             max_speed = feed * peak_rpm
-        moves.append(Move(nx, nz, speed, line, spindle_mode == 96, motion == 1 and feed_mode == 95, x, z, max_speed))
+        moves.append(Move(nx, nz, speed, line, spindle_mode == 96, motion == 1 and feed_mode == 95, x, z, max_speed, tool_x, tool_z, active_tool))
         x, z = nx, nz
     if require_preamble and not ended:
         raise ValueError('Program must end with M2')

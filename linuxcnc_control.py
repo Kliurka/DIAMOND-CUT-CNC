@@ -1,8 +1,10 @@
 """LinuxCNC manual and AUTO control through NML; no direct stepgen writes."""
 import math
+import re
 from pathlib import Path
 import time
 
+from lathe_tools import LatheToolTable
 from gcode_playback import parse_program
 from machine_settings import save_limits, validate_limits, save_rapids
 
@@ -214,6 +216,68 @@ class LinuxCNCControl:
         save_rapids(self.ini_path, speeds)
         self.limits_pending = True
 
+    def tool_table_path(self):
+        if self.ini_path is None:
+            raise RuntimeError('Machine INI path unavailable')
+        if self.ini.find('EMCIO', 'DB_PROGRAM') or int(self.ini.find('EMCIO', 'RANDOM_TOOLCHANGER') or 0):
+            raise RuntimeError('This editor requires a file tool table and nonrandom manual tool changer')
+        name = self.ini.find('EMCIO', 'TOOL_TABLE')
+        if not name:
+            raise RuntimeError('Set [EMCIO] TOOL_TABLE in the machine INI')
+        return (self.ini_path.parent / name).resolve()
+
+    def require_tool_idle(self):
+        state = self.snapshot()
+        if (not state['stationary'] or state['homing'] or state['running']
+                or self.positioning or self.output_test_active or self.active_jog is not None
+                or self.stat.interp_state != self.api.INTERP_IDLE):
+            raise RuntimeError('Stop motion, programs and I/O tests before editing tools')
+
+    def reload_tools(self):
+        self.require_tool_idle()
+        self.cmd.load_tool_table()
+        if self.cmd.wait_complete(1) != self.api.RCS_DONE:
+            raise RuntimeError('LinuxCNC tool-table reload failed')
+
+    def select_tool(self, number):
+        self.require_tool_idle()
+        self.require_ready(homed=True)
+        if number:
+            table = LatheToolTable(self.tool_table_path())
+            if number not in table.locations:
+                raise ValueError('Save this tool first')
+            table.tools[number].validate()
+        self.reload_tools()
+        self.cmd.mode(self.api.MODE_MDI)
+        try:
+            if self.cmd.wait_complete(1) != self.api.RCS_DONE:
+                raise RuntimeError('MDI mode switch failed')
+            # M61 records the already manually mounted tool; no M6 or axis motion.
+            self.cmd.mdi(f'G21 G8 M61 Q{number}')
+            if self.cmd.wait_complete(1) != self.api.RCS_DONE:
+                raise RuntimeError('Tool selection failed')
+            self.cmd.mdi(f'G43 H{number}' if number else 'G49')
+            if self.cmd.wait_complete(1) != self.api.RCS_DONE:
+                raise RuntimeError('Tool compensation failed')
+        except Exception:
+            self.cmd.abort()
+            raise
+        finally:
+            self.cmd.mode(self.api.MODE_MANUAL)
+            self.cmd.wait_complete(1)
+
+    def validate_program_tools(self, code, moves):
+        if not moves.tool_numbers:
+            return
+        table = LatheToolTable(self.tool_table_path())
+        if len(moves.tool_numbers) != 1:
+            raise RuntimeError('Use one manually mounted tool per program')
+        for number in moves.tool_numbers:
+            if number not in table.locations or f'(TOOL_RECORD {number} {table.tools[number].fingerprint()})' not in code:
+                raise RuntimeError('Tool table changed: regenerate G-code')
+            if getattr(self.stat, 'tool_in_spindle', 0) != number:
+                raise RuntimeError(f'Mount and select T{number} in Tools before Run')
+
     def center_signature(self):
         return (float(self.stat.g5x_offset[0]), float(self.stat.g92_offset[0]))
 
@@ -223,7 +287,7 @@ class LinuxCNCControl:
                 raise RuntimeError('Calibrate the spindle center at a known radius in Settings before Run (required each session)')
             if any(move.css and (move.x > 0 or move.start_x > 0) for move in moves):
                 raise RuntimeError('Centered-X CSS toolpath must stay at X <= 0')
-            if abs(self.stat.tool_offset[0]) > 1e-6:
+            if abs(self.stat.tool_offset[0]) > 1e-6 and not moves.tool_numbers:
                 raise RuntimeError('Centered-X Run requires cancelled tool compensation; recalibrate in Settings')
         if any(move.feed_per_rev for move in moves):
             if not self.rpm_feedback_verified or not self.spindle_feedback():
@@ -252,7 +316,10 @@ class LinuxCNCControl:
         centered = '(X_REFERENCE spindle_center)' in code
         if self.x_center_reference is not None and ('(X_REFERENCE legacy)' in code or 'SIMULATION PREVIEW - VERIFY COORDINATES' in code):
             raise RuntimeError('Regenerate old edge-zero G-code from a new spindle-centered scan')
-        moves = parse_program(code, start=(state["work"]["X"], state["work"]["Z"]), require_preamble=True)
+        tools = LatheToolTable(self.tool_table_path()).tools if re.search(r'\bG43\b', re.sub(r'\([^)]*\)', '', code), re.I) else None
+        moves = parse_program(code, start=(state["work"]["X"], state["work"]["Z"]), require_preamble=True,
+                              tools=tools, initial_tool_offset=(self.stat.tool_offset[0], self.stat.tool_offset[2]))
+        self.validate_program_tools(code, moves)
         self.check_spindle_modes(moves, centered=centered)
         for move in moves:
             for axis, value, index in (("X", move.x, 0), ("Z", move.z, 2)):
@@ -260,10 +327,11 @@ class LinuxCNCControl:
                 high = self.ini.find("AXIS_" + axis, "MAX_LIMIT")
                 if low is None or high is None:
                     raise RuntimeError(f"Missing {axis} soft limits in INI")
-                # The generated header uses G49: no active tool-length offset.
-                machine = value + self.stat.g5x_offset[index] + self.stat.g92_offset[index]
+                machine = value + self.stat.g5x_offset[index] + self.stat.g92_offset[index] + (move.tool_x if axis == "X" else move.tool_z)
                 if not float(low) <= machine <= float(high):
                     raise RuntimeError(f"Line {move.line}: {axis} {machine:.4f} mm exceeds machine limits")
+        if moves.tool_numbers:
+            self.reload_tools()
         self.stop_jog()
         try:
             self.cmd.mode(self.api.MODE_AUTO)
@@ -278,6 +346,7 @@ class LinuxCNCControl:
                     or not self.stat.inpos or not (self.stat.homed[0] and self.stat.homed[2])
                     or self.output_test_active or self.stat.interp_state != self.api.INTERP_IDLE):
                 raise RuntimeError("Run conditions changed while loading")
+            self.validate_program_tools(code, moves)
             self.check_spindle_modes(moves, centered=centered)
             self.program_requires_rpm = any(move.feed_per_rev for move in moves)
             self.program_running = True
@@ -311,6 +380,8 @@ class LinuxCNCControl:
         self.stat.poll()
         if getattr(self.stat, 'g5x_index', 1) != 1 or self.stat.rotation_xy != 0:
             raise RuntimeError('Center touch-off requires G54 with zero XY rotation')
+        if any(abs(self.stat.tool_offset[i]) > 1e-6 for i in (0, 2)):
+            raise RuntimeError('Cancel tool compensation before calibrating the master spindle center')
         self.x_center_reference = None
         self.set_work_position('X', -radius, cancel_tool=True)
         self.stat.poll()
@@ -333,9 +404,7 @@ class LinuxCNCControl:
             raise RuntimeError('Scan-start move requires G54 with zero XY rotation')
         if self.x_center_reference is None or self.center_signature() != self.x_center_reference:
             raise RuntimeError('Calibrate the spindle center in Settings first')
-        if abs(self.stat.tool_offset[0]) > 1e-6:
-            raise RuntimeError('Cancel X tool compensation and recalibrate the center first')
-        target = work_x + self.stat.g5x_offset[0] + self.stat.g92_offset[0]
+        target = work_x + self.stat.g5x_offset[0] + self.stat.g92_offset[0] + self.stat.tool_offset[0]
         lower, upper = self.coordinate_limits()['X']
         if not lower <= target <= upper:
             raise ValueError('Scan-start X is outside machine limits')

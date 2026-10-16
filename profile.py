@@ -141,6 +141,7 @@ def generate_gcode(
     use_css: bool = False,
     pass_specs: list[PassSpec] | None = None,
     cut_direction: str = "scan",
+    tool=None,
 ) -> str:
     if not samples or passes < 1 or feed <= 0 or rpm <= 0 or max_rpm <= 0:
         raise ValueError("Missing profile or invalid machining parameter")
@@ -203,10 +204,15 @@ def generate_gcode(
             return setting.rpm
         radius = abs(pass_points(setting)[0][0])
         return min(max_rpm, setting.surface_speed * 1000 / (2 * math.pi * radius)) if radius else max_rpm
+    if tool is not None:
+        tool.validate()
+        if tool_x_offset or tool_z_offset:
+            raise ValueError('Native G43 tools cannot be combined with the legacy tool X/Z offsets')
     lines = [
         "(PROFILE TOOLPATH - VERIFY COORDINATES AND CLEARANCES)",
         "(X_REFERENCE spindle_center)" if samples[0].x_reference == 'spindle_center' else "(X_REFERENCE legacy)",
         "G21 G90 G40 G49 G54",
+        *([f'(TOOL_RECORD {tool.number} {tool.fingerprint()})', 'G18', f'G43 H{tool.number}'] if tool is not None else []),
         "G8",
         "G94",
         f"G97 S{start_rpm(active[0]):.3f}" if css_mode(active[0]) else f"G97 S{active[0].rpm}",

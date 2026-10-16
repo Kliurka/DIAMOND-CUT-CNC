@@ -18,6 +18,7 @@ from profile import PassSpec, generate_gcode, load_csv, save_csv, simulated_scan
 from gcode_playback import Playback, parse_program
 from code_editor import GCodeText
 from touch_keyboard import TouchKeyboard
+from lathe_tools_ui import ToolsPanel
 
 
 class Plot(QWidget):
@@ -437,7 +438,7 @@ class Window(QMainWindow):
         self.center_calibration_button = QPushButton('Set spindle center at known radius')
         self.center_calibration_button.clicked.connect(self.calibrate_center)
         form.addRow(self.center_calibration_button)
-        radius_help = QLabel("Place the tool tip at this measured radius, then press R beside Work X. X becomes −radius; Home stays unchanged.")
+        radius_help = QLabel("Place the tool tip at this measured radius, then press Set spindle center above with tool compensation cancelled. X becomes −radius; Home stays unchanged.")
         radius_help.setWordWrap(True)
         form.addRow(radius_help)
         self.rpm_feedback_verified = QCheckBox("Real spindle RPM sensor connected and checked")
@@ -496,8 +497,7 @@ class Window(QMainWindow):
         form.addRow(self.limits_status)
         for label, widget in (
             ("Sensor X offset", self.sensor_x),
-            ("Sensor Z offset", self.sensor_z), ("Tool X offset", self.tool_x),
-            ("Tool Z offset", self.tool_z), ("Safe Z clearance", self.safe_z),
+            ("Sensor Z offset", self.sensor_z), ("Safe Z clearance", self.safe_z),
             ("Maximum total cut depth", self.max_depth),
         ):
             form.addRow(label, widget)
@@ -506,6 +506,8 @@ class Window(QMainWindow):
         settings_scroll.setWidget(settings)
         tabs.addTab(settings_scroll, "3. Settings")
         self.change_cut_mode(self.mode.currentIndex(), reset_feed=False)
+        self.tools_panel = ToolsPanel(self.backend, self.tool_changed)
+        tabs.addTab(self.tools_panel, "4. Tools")
         return tabs
 
     def update_dros(self):
@@ -850,6 +852,16 @@ class Window(QMainWindow):
         except ValueError as exc:
             QMessageBox.warning(self, "Profile", str(exc))
 
+    def tool_changed(self, tool):
+        # Legacy numerical offsets and native G43 must never be combined.
+        if tool is not None:
+            self.tool_x.setValue(0)
+            self.tool_z.setValue(0)
+        self.tool_x.setEnabled(tool is None)
+        self.tool_z.setEnabled(tool is None)
+        if self.native_widget is not None:
+            self.native_widget.refresh_work_coordinates()
+
     def generate(self):
         if self.backend is not None and self.backend.program_running:
             return False
@@ -868,7 +880,7 @@ class Window(QMainWindow):
                 safe_z=self.safe_z.value(), sensor_x_offset=self.sensor_x.value(),
                 sensor_z_offset=self.sensor_z.value(), tool_x_offset=self.tool_x.value(),
                 tool_z_offset=self.tool_z.value(), use_css=self.mode.currentIndex() == 1,
-                pass_specs=settings,
+                pass_specs=settings, tool=self.tools_panel.program_tool(),
                 cut_direction="outer_to_center" if self.cut_direction.currentIndex() == 0 else "center_to_outer")
             was_opened = self.opened_gcode is not None
             self.opened_gcode = None
@@ -898,7 +910,10 @@ class Window(QMainWindow):
         try:
             rapids = {axis: min(box.value(), self.backend.limits[axis] * 60) if self.backend else box.value()
                       for axis, box in self.rapid_speed.items()}
-            moves = parse_program(self.code.toPlainText(), start=start, rapid=rapids, require_preamble=True)
+            initial_offset = (self.backend.stat.tool_offset[0], self.backend.stat.tool_offset[2]) if self.backend else (0, 0)
+            moves = parse_program(self.code.toPlainText(), start=start, rapid=rapids, require_preamble=True,
+                                  tools=self.tools_panel.program_tools(), initial_tool_offset=initial_offset)
+            start = (moves[0].start_x, moves[0].start_z)
             self.playback = Playback(moves, start)
             self.playback_time = time.monotonic()
             self.native_widget.set_simulated_work_position(start)
