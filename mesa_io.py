@@ -3,7 +3,7 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QTableWidget,
                             QTableWidgetItem, QCheckBox, QPushButton,
                             QGroupBox, QHBoxLayout, QSpinBox, QApplication,
-                            QInputDialog, QLineEdit, QMessageBox)
+    QMessageBox)
 from bench_stepgen import BenchStepgen, STEPGEN
 
 PREFIX = "hm2_7i96s.0"
@@ -53,8 +53,7 @@ class MesaIOPanel(QWidget):
         self.writer = writer
         self.test = None
         if backend is not None:
-            from output_test import OutputTest, TestPassword
-            self.password = TestPassword()
+            from output_test import OutputTest
             self.test = OutputTest(backend, lambda i, on: write_output(reader, writer, i, on))
             backend.output_test_stop = self.test.end
         self.stepgen = BenchStepgen(writer if allow_bench else None,
@@ -62,14 +61,16 @@ class MesaIOPanel(QWidget):
         layout = QVBoxLayout(self)
         title = QLabel("<h2>Mesa 7i96S — I/O monitor</h2>")
         layout.addWidget(title)
-        layout.addWidget(QLabel("Real I/O and STEPGEN0 bench test. Left axis controls and laser scan are simulated."
-                               if allow_bench else "Real axes use LinuxCNC. Unlock Output test to switch real outputs."))
+        notice = QLabel("Real I/O and STEPGEN0 bench test. Left axis controls and laser scan are simulated."
+                        if allow_bench else "Enable output test without a password. Outputs stay ON when switching tabs or windows; use OFF or Stop tests to stop.")
+        notice.setWordWrap(True)
+        layout.addWidget(notice)
         if self.test:
             controls = QHBoxLayout()
-            self.unlock_button = QPushButton("Unlock output test")
+            self.unlock_button = QPushButton("Enable output test")
             self.unlock_button.clicked.connect(self.unlock_test)
             controls.addWidget(self.unlock_button)
-            self.lock_button = QPushButton("Stop tests / Lock")
+            self.lock_button = QPushButton("Stop tests / Disable")
             self.lock_button.clicked.connect(self.lock_test)
             controls.addWidget(self.lock_button)
             self.rpm = QSpinBox()
@@ -182,14 +183,10 @@ class MesaIOPanel(QWidget):
         return stopped
 
     def application_state_changed(self, state):
-        if state != Qt.ApplicationActive and self.test and self.test.active:
-            self.lock_test()
         if state != Qt.ApplicationActive and self.stepgen.active:
             self.stop_motor()
 
     def hideEvent(self, event):
-        if self.test and self.test.active:
-            self.lock_test()
         if self.stepgen.active:
             self.stop_motor()
         super().hideEvent(event)
@@ -284,7 +281,7 @@ class MesaIOPanel(QWidget):
                              (self.test is None or self.test.active))
         if self.test:
             self.spindle_on.setEnabled(values is not None and self.test.active)
-            self.unlock_button.setText("Output test UNLOCKED" if self.test.active else "Unlock output test")
+            self.unlock_button.setText("Output test ENABLED" if self.test.active else "Enable output test")
 
     def confirm_on(self, target):
         return QMessageBox.warning(self, "Real output test",
@@ -295,24 +292,10 @@ class MesaIOPanel(QWidget):
         if self.test.active:
             return
         try:
-            creating = not self.password.exists()
-            value, ok = QInputDialog.getText(self, "Output test password",
-                "Create password (at least 6 characters)" if creating else "Password", QLineEdit.Password)
-            if not ok:
-                return
-            if creating:
-                again, ok = QInputDialog.getText(self, "Output test password", "Repeat password", QLineEdit.Password)
-                if not ok:
-                    return
-                if value != again:
-                    raise ValueError("Passwords do not match")
-                self.password.set(value)
-            elif not self.password.verify(value):
-                raise ValueError("Incorrect password")
             if not self.confirm_on("OUTPUT TEST MODE (OUT0–OUT5 and spindle)"):
                 return
             self.test.begin()
-            self.command_status.setText("Output test unlocked — axis jog and homing are blocked")
+            self.command_status.setText("Output test enabled — runs until OFF/STOP; axis jog and homing are blocked")
         except Exception as exc:
             QMessageBox.warning(self, "Output test", str(exc))
         self.refresh()
